@@ -760,8 +760,95 @@ void add_bias_conv (conv_layer_t *layer, float *bias, int in_channel, int in_hig
     
 }
 
-void backward_relu (float *output_arr, float *input_arr, float ) {
+void backward_relu (float *output_arr, float *input_arr, float *pre_activation, int n_arr) {
+    for (size_t i = 0; i < n_arr; i++)
+    {
+        if (pre_activation[i] > 0)
+        {
+            output_arr[i] = input_arr[i];
+        }
+        else
+        {
+            output_arr[i] = 0;
+        }
+        
+        
+    }
+    
+}
 
+float float_array_sum  (float *arr, int n_arr) {
+    float sum = 0.0f;
+    for (size_t i = 0; i < n_arr; i++)
+    {
+        sum += arr[i];
+    }
+    return sum;
+}
+
+/**
+ * @param in_h 画像高さは畳み込み処理前のものを入力
+ * @param in_w 画像幅は畳み込み処理前のものを入力
+ */
+void backward_conv_filter_single_to_multi (conv_filter_t *output_grad, float *activation, conv_layer_t *z_delta, int in_channel, int in_h, int in_w) {
+    int out_h = in_h - filter_hight + 1;
+    int out_w = in_w - filter_width + 1;
+
+    for (size_t c = 0; c < in_channel; c++)
+    {
+        for (size_t kh = 0; kh < filter_hight; kh++)
+        {
+            for (size_t kw = 0; kw < filter_width; kw++)
+            {
+                for (size_t h = 0; h < out_h; h++)
+                {
+                    for (size_t w = 0; w < out_w; w++)
+                    {
+                        output_grad[c].filter[filter_width * kh + kw] += z_delta[c].layer[filter_width * kh + kw] * activation[in_w * kh + kw + in_w * h + w];
+                    }
+                    
+                }
+                
+            }
+            
+        }
+        
+    }
+    
+}
+
+/**
+ * @param in_h 画像高さは畳み込み処理前のものを入力
+ * @param in_w 画像幅は畳み込み処理前のものを入力
+ */
+void backward_conv_filter_multi_to_multi (conv_filter_t *output_grad, maxpool_layer_t *activation, conv_layer_t *z_delta, int in_channel, int in_h, int in_w) {
+    int out_h = in_h - filter_hight + 1;
+    int out_w = in_w - filter_width + 1;
+
+    for (size_t c = 0; c < in_channel; c++)
+    {
+        for (size_t kh = 0; kh < filter_hight; kh++)
+        {
+            for (size_t kw = 0; kw < filter_width; kw++)
+            {
+                for (size_t h = 0; h < out_h; h++)
+                {
+                    for (size_t h = 0; h < out_h; h++)
+                    {
+                        for (size_t w = 0; w < out_w; w++)
+                        {
+                            output_grad[c].filter[filter_width * kh + kw] += z_delta[c].layer[filter_width * kh + kw] * activation[in_w * kh + kw + in_w * h + w];
+                        }
+                    }
+                    
+                }
+                
+            }
+            
+        }
+        
+    }
+    
 }
 
 void* training_threaded (void* arg){
@@ -874,6 +961,8 @@ int main (void){
     float *m_b1, *m_b4;
     float *v_w1, *v_w4;
     float *v_b1, *v_b4;
+    float grad_to_b_conv1;
+    float grad_to_b_conv2;
 
     //allocetion params
     input_layer = (float*)malloc(n_of_input_layer * sizeof(float));
@@ -1201,8 +1290,17 @@ int main (void){
             unflatten(backward_second_maxpool, delta_in, n_of_second_channel, ((28 - filter_hight + 1)/2 - filter_hight + 1)/2, ((28 - filter_hight + 1)/2 - filter_hight + 1)/2);
             
             maxpool_backward(backward_second_maxpool, backward_second_conv, second_maxpooling_layer, n_of_second_channel, (28 - filter_hight + 1)/2 - filter_hight + 1, (28 - filter_hight + 1)/2 - filter_hight + 1, 2);
+            
+            for (size_t i = 0; i < n_of_second_channel; i++)
+            {
+                backward_relu(backward_second_conv[i].layer, backward_second_conv[i].layer, second_conv_layer_pre_activation[i].layer, ((28 - filter_hight + 1)/2 - filter_hight + 1) * ((28 - filter_hight + 1)/2 - filter_hight + 1));
+            }
 
-            backward_relu();
+            for (size_t i = 0; i < n_of_second_channel; i++)
+            {
+                grad_to_b_conv2 += float_array_sum(backward_second_conv[i].layer, ((28 - filter_hight + 1)/2 - filter_hight + 1) * ((28 - filter_hight + 1)/2 - filter_hight + 1));
+            }
+            
 
             for (int i = 0; i < n_of_first_hidden_layer; i++){
                 grad_to_b1t[i] += (float)grad_to_b1[i];
