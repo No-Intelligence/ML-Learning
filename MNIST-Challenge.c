@@ -9,16 +9,13 @@
 #include <stdbool.h>
 #include <immintrin.h>
 
-#define n_of_second_hidden_layer 0
-#define n_of_third_hidden_layer 0
-
 #define PI 3.14159265358979
 #define n_of_input_layer 1600
 #define n_of_first_hidden_layer 128
 #define n_of_output_layer 10
-#define learning_rate 0.0001
-#define batch_size 160
-#define epoch 20
+#define learning_rate 0.001
+#define batch_size 1
+#define epoch 1
 #define debug 1
 #define neck_check 0
 #define threaded 0
@@ -804,7 +801,7 @@ void backward_conv_filter_single_to_multi (conv_filter_t *output_grad, float *ac
                 {
                     for (size_t w = 0; w < out_w; w++)
                     {
-                        output_grad[c].filter[filter_width * kh + kw] += z_delta[c].layer[filter_width * kh + kw] * activation[in_w * kh + kw + in_w * h + w];
+                        output_grad[c].filter[filter_width * kh + kw] += z_delta[c].layer[out_w * h + w] * activation[in_w * kh + kw + in_w * h + w];
                     }
                     
                 }
@@ -839,7 +836,7 @@ void backward_conv_filter_multi_to_multi (conv_filter_t *output_grad, maxpool_la
                     {
                         for (size_t w = 0; w < out_w; w++)
                         {
-                            output_grad[in_channel * oc + ic].filter[filter_width * kh + kw] += z_delta[oc].layer[filter_width * kh + kw] * activation[ic].layer[in_w * kh + kw + in_w * h + w];
+                            output_grad[in_channel * oc + ic].filter[filter_width * kh + kw] += z_delta[oc].layer[out_w * h + w] * activation[ic].layer[in_w * kh + kw + in_w * h + w];
                         }
                     }
                     
@@ -851,6 +848,25 @@ void backward_conv_filter_multi_to_multi (conv_filter_t *output_grad, maxpool_la
         
     }
     
+}
+
+void backward_conv_layer (maxpool_layer_t *d_input, conv_layer_t *d_z, conv_filter_t *filter, int n_input_channel, int n_output_channel, int in_h, int in_w) {
+    int out_h = in_h - filter_hight + 1;
+    int out_w = in_w - filter_width + 1;
+
+    // dx: 入力と同じ形状 [ic].layer[ih * in_w + iw]
+
+    // ゼロ初期化
+    for (int ic = 0; ic < n_input_channel; ic++)
+    memset(d_input[ic].layer, 0, in_h * in_w * sizeof(float));
+
+    for (int oc = 0; oc < n_output_channel; oc++)
+        for (int ic = 0; ic < n_input_channel; ic++)
+            for (int kh = 0; kh < filter_hight; kh++)
+                for (int kw = 0; kw < filter_width; kw++)
+                    for (int oh = 0; oh < out_h; oh++)
+                        for (int ow = 0; ow < out_w; ow++)
+                            d_input[ic].layer[(oh + kh) * in_w + (ow + kw)] += d_z[oc].layer[oh * out_w + ow]* filter[n_input_channel * oc + ic].filter[filter_width * kh + kw];
 }
 
 void* training_threaded (void* arg){
@@ -963,10 +979,11 @@ int main (void){
     float *m_b1, *m_b4;
     float *v_w1, *v_w4;
     float *v_b1, *v_b4;
-    float grad_to_b_conv1;
-    float grad_to_b_conv2;
+    float grad_to_b_conv1[n_of_first_channel];
+    float grad_to_b_conv2[n_of_second_channel];
 
     //allocetion params
+    float *input_image = calloc(784, sizeof(float));
     input_layer = (float*)malloc(n_of_input_layer * sizeof(float));
     first_hidden_layer = (float*)malloc(n_of_first_hidden_layer * sizeof(float));
     output_layer = (float*)malloc(n_of_output_layer * sizeof(float));
@@ -987,12 +1004,12 @@ int main (void){
     grad_to_w1t = (float*)calloc(n_of_input_layer * n_of_first_hidden_layer, sizeof(float));
     grad_to_b4t = (float*)calloc(n_of_output_layer, sizeof(float));
     grad_to_b1t = (float*)calloc(n_of_first_hidden_layer, sizeof(float));
-    m_w1 = calloc(n_of_input_layer * n_of_first_hidden_layer, sizeof(float));
+    /*m_w1 = calloc(n_of_input_layer * n_of_first_hidden_layer, sizeof(float));
     m_b1 = calloc(n_of_first_hidden_layer, sizeof(float));
     m_b4 = calloc(n_of_output_layer, sizeof(float));
     v_w1 = calloc(n_of_input_layer * n_of_first_hidden_layer, sizeof(float));
     v_b1 = calloc(n_of_first_hidden_layer, sizeof(float));
-    v_b4 = calloc(n_of_output_layer, sizeof(float));
+    v_b4 = calloc(n_of_output_layer, sizeof(float));*/
     conv_layer_t *first_conv_layer_pre_activation = alloc_conv_layer(n_of_first_channel, 28 - filter_hight + 1, 28 - filter_width + 1);
     conv_layer_t *first_conv_layer_activation = alloc_conv_layer(n_of_first_channel, 28 - filter_hight + 1, 28 - filter_width + 1);
     conv_filter_t *first_conv_filter = alloc_filter(n_of_first_channel);
@@ -1005,8 +1022,12 @@ int main (void){
     float *second_conv_bias = calloc(n_of_second_channel, sizeof(float));
     maxpool_layer_t *backward_second_maxpool = alloc_maxpool_layer(n_of_second_channel, ((28 - filter_hight + 1)/2 - filter_hight + 1)/2, ((28 - filter_hight + 1)/2 - filter_hight + 1)/2);
     conv_layer_t *backward_second_conv = alloc_conv_layer(n_of_second_channel, (28 - filter_hight + 1)/2 - filter_hight + 1, (28 - filter_hight + 1)/2 - filter_hight + 1);
+    conv_filter_t *grad_to_second_conv_filter = alloc_filter(n_of_first_channel * n_of_second_channel);
+    maxpool_layer_t *backward_first_maxpool = alloc_maxpool_layer(n_of_first_channel, (28 - filter_hight + 1)/2, (28 - filter_hight + 1)/2);
+    conv_layer_t *backward_first_conv = alloc_conv_layer(n_of_first_channel, 28 - filter_hight + 1, 28 - filter_hight + 1);
+    conv_filter_t *grad_to_first_conv_filter = alloc_filter(n_of_first_channel);
 
-    thread_workspace_t *ws = alloc_workspace(4);
+    //thread_workspace_t *ws = alloc_workspace(4);
     bool *dropout_mask_for_first_hidden_layer = malloc(n_of_first_hidden_layer * (60000/batch_size));
 
     //file
@@ -1054,6 +1075,14 @@ int main (void){
     fseek(test_data_images, 16, 0);
     fseek(test_data_labels, 8, 0);
 
+    memset(grad_to_w1, 0, n_of_input_layer * n_of_first_hidden_layer * sizeof(float));
+    memset(grad_to_w4, 0, n_of_first_hidden_layer * n_of_output_layer * sizeof(float));
+    memset(grad_to_b1, 0, n_of_first_hidden_layer * sizeof(float));
+    memset(grad_to_b4, 0, n_of_output_layer * sizeof(float));
+    for (int i = 0; i < n_of_first_channel; i++)
+        memset(grad_to_first_conv_filter[i].filter, 0, filter_hight * filter_width * sizeof(float));
+    for (int i = 0; i < n_of_first_channel * n_of_second_channel; i++)
+        memset(grad_to_second_conv_filter[i].filter, 0, filter_hight * filter_width * sizeof(float));
 
     printf("Training start\n");
     for (int epoch_loop = 0; epoch_loop < epoch; epoch_loop++){
@@ -1211,14 +1240,14 @@ int main (void){
 
             //inputting data
             for (int i = 0; i < 784; i++){
-                input_layer[i] = (float)(training_image_buffer[784 * order_indices[loop] + i])/255;
+                input_image[i] = (float)(training_image_buffer[784 * order_indices[loop] + i])/255;
             }
             
             //inputting label
             answer = training_label_buffer[order_indices[loop]];
 
             //forward pass
-            convolution_single_to_multi(input_layer, first_conv_filter, first_conv_layer_pre_activation, 28, 28, n_of_first_channel);
+            convolution_single_to_multi(input_image, first_conv_filter, first_conv_layer_pre_activation, 28, 28, n_of_first_channel);
             add_bias_conv(first_conv_layer_pre_activation, first_conv_bias, n_of_first_channel, (28 - filter_hight + 1), (28 - filter_hight + 1));
             for (size_t i = 0; i < n_of_first_channel; i++)
             {
@@ -1298,48 +1327,81 @@ int main (void){
                 backward_relu(backward_second_conv[i].layer, backward_second_conv[i].layer, second_conv_layer_pre_activation[i].layer, ((28 - filter_hight + 1)/2 - filter_hight + 1) * ((28 - filter_hight + 1)/2 - filter_hight + 1));
             }
 
+            //バイアス勾配
             for (size_t i = 0; i < n_of_second_channel; i++)
             {
-                grad_to_b_conv2 += float_array_sum(backward_second_conv[i].layer, ((28 - filter_hight + 1)/2 - filter_hight + 1) * ((28 - filter_hight + 1)/2 - filter_hight + 1));
+                grad_to_b_conv2[i] = float_array_sum(backward_second_conv[i].layer, ((28 - filter_hight + 1)/2 - filter_hight + 1) * ((28 - filter_hight + 1)/2 - filter_hight + 1));
             }
-            
 
-            for (int i = 0; i < n_of_first_hidden_layer; i++){
-                grad_to_b1t[i] += (float)grad_to_b1[i];
+            //フィルター勾配
+            backward_conv_filter_multi_to_multi(grad_to_second_conv_filter, first_maxpooling_layer, backward_second_conv, n_of_second_channel, n_of_first_channel, (28 - filter_hight + 1)/2, (28 - filter_hight + 1)/2);
+
+            //前層アクティベーション勾配
+            backward_conv_layer(backward_first_maxpool, backward_second_conv, second_conv_filter, n_of_first_channel, n_of_second_channel, (28 - filter_hight + 1)/2, (28 - filter_hight + 1)/2);
+            
+            maxpool_backward(backward_first_maxpool, backward_first_conv, first_maxpooling_layer, n_of_first_channel, 28 - filter_hight + 1, 28 - filter_hight + 1, 2);
+            
+            for (size_t i = 0; i < n_of_first_channel; i++)
+            {
+                backward_relu(backward_first_conv[i].layer, backward_first_conv[i].layer, first_conv_layer_pre_activation[i].layer, (28 - filter_hight + 1) * (28 - filter_hight + 1));
             }
-            for (int i = 0; i < n_of_output_layer; i++){
-                grad_to_b4t[i] += (float)grad_to_b4[i];
+
+            //バイアス勾配
+            for (size_t i = 0; i < n_of_first_channel; i++)
+            {
+                grad_to_b_conv1[i] = float_array_sum(backward_first_conv[i].layer, (28 - filter_hight + 1) * (28 - filter_hight + 1));
             }
-            for (int i = 0; i < n_of_input_layer * n_of_first_hidden_layer; i++){
-                grad_to_w1t[i] += (float)grad_to_w1[i];
-            }
-            for (int i = 0; i < n_of_third_hidden_layer * n_of_output_layer; i++){
-                grad_to_w4t[i] += (float)grad_to_w4[i];
-            }
+
+            //フィルター勾配
+            backward_conv_filter_single_to_multi(grad_to_first_conv_filter, input_image, backward_first_conv, n_of_first_channel, 28, 28);
 
             //update params
-            if (loop%batch_size == (batch_size-1)){
-                for (size_t i = 0; i < n_of_first_hidden_layer; i++) grad_to_b1t[i] /= batch_size;
-                for (size_t i = 0; i < n_of_output_layer; i++) grad_to_b4t[i] /= batch_size;
-                for (size_t i = 0; i < n_of_input_layer * n_of_first_hidden_layer; i++) grad_to_w1t[i] /= batch_size;
-                for (size_t i = 0; i < n_of_third_hidden_layer * n_of_output_layer; i++) grad_to_w4t[i] /= batch_size;
-                
+            //if (loop%batch_size == (batch_size-1)){
                 if (adam == false) {
-                    update_params(weight_to_first_hidden_layer, grad_to_w1t, bias_of_first_hidden_layer, grad_to_b1t, n_of_input_layer * n_of_first_hidden_layer, n_of_first_hidden_layer);
-                    update_params(weight_to_output_layer, grad_to_w4t, bias_of_output_layer, grad_to_b4t, n_of_third_hidden_layer * n_of_output_layer, n_of_output_layer);
+                    update_params(weight_to_first_hidden_layer, grad_to_w1, bias_of_first_hidden_layer, grad_to_b1, n_of_input_layer * n_of_first_hidden_layer, n_of_first_hidden_layer);
+                    update_params(weight_to_output_layer, grad_to_w4, bias_of_output_layer, grad_to_b4, n_of_first_hidden_layer * n_of_output_layer, n_of_output_layer);
+                    for (size_t c = 0; c < n_of_first_channel; c++)
+                    {
+                        for (size_t h = 0; h < filter_hight; h++)
+                        {
+                            for (size_t w = 0; w < filter_width; w++)
+                            {
+                                first_conv_filter[c].filter[filter_width * h + w] -= learning_rate * grad_to_first_conv_filter[c].filter[filter_width * h + w];
+                            }
+                            
+                        }
+                        first_conv_bias[c] -= learning_rate * grad_to_b_conv1[c];
+                        
+                    }
+                    for (size_t c = 0; c < n_of_second_channel; c++)
+                    {
+                        for (size_t h = 0; h < filter_hight; h++)
+                        {
+                            for (size_t w = 0; w < filter_width; w++)
+                            {
+                                second_conv_filter[c].filter[filter_width * h + w] -= learning_rate * grad_to_second_conv_filter[c].filter[filter_width * h + w];
+                            }
+                            
+                        }
+                        second_conv_bias[c] -= learning_rate * grad_to_b_conv2[c];
+                        
+                    }
+                    memset(grad_to_w1, 0, n_of_input_layer * n_of_first_hidden_layer * sizeof(float));
+                    memset(grad_to_w4, 0, n_of_first_hidden_layer * n_of_output_layer * sizeof(float));
+                    memset(grad_to_b1, 0, n_of_first_hidden_layer * sizeof(float));
+                    memset(grad_to_b4, 0, n_of_output_layer * sizeof(float));
+                    for (int i = 0; i < n_of_first_channel; i++)
+                        memset(grad_to_first_conv_filter[i].filter, 0, filter_hight * filter_width * sizeof(float));
+                    for (int i = 0; i < n_of_first_channel * n_of_second_channel; i++)
+                        memset(grad_to_second_conv_filter[i].filter, 0, filter_hight * filter_width * sizeof(float));
+                    
                 }
                 else {
                     adam_t++;
-                    adam_update(weight_to_first_hidden_layer, grad_to_w1t, m_w1, v_w1, n_of_input_layer * n_of_first_hidden_layer, bias_of_first_hidden_layer, grad_to_b1t, m_b1, v_b1, n_of_first_hidden_layer, adam_t);
-                    adam_update(weight_to_output_layer, grad_to_w4t, m_w4, v_w4, n_of_third_hidden_layer * n_of_output_layer, bias_of_output_layer, grad_to_b4t, m_b4, v_b4, n_of_output_layer, adam_t);
                 }
 
-                float_array_zerofill(grad_to_b1t, n_of_first_hidden_layer);
-                float_array_zerofill(grad_to_b4t, n_of_output_layer);
-                float_array_zerofill(grad_to_w1t, n_of_input_layer * n_of_first_hidden_layer);
-                float_array_zerofill(grad_to_w4t, n_of_third_hidden_layer * n_of_output_layer);
                 batch++;
-            }
+            //}
         }
         end = clock();
         free(training_image_buffer);
@@ -1349,8 +1411,6 @@ int main (void){
         fprintf(fp, "epoch%d,%f,", epoch_loop+1, avg_loss / 60000);
         if (neck_check && !threaded) {printf("time: %f sec\n", (double)(end - start) / CLOCKS_PER_SEC);}
         else if (neck_check && threaded) {printf("time: %f sec\n", (double)(end - start)/4 / CLOCKS_PER_SEC);}
-        fseek(learning_data_images, -784 * 60000, SEEK_CUR);
-        fseek(learning_data_labels, -60000, SEEK_CUR);
         avg_loss = 0.0f;
 
         //testify section
@@ -1358,15 +1418,54 @@ int main (void){
             if (!(loop%1000) && debug) {printf("%d datas have beed precessed.\n", loop);}
             
             //inputting data
-            for (int i = 0; i < n_of_input_layer; i++)
+            for (int i = 0; i < 784; i++)
             {
-                input_layer[i] = (float)(fgetc(test_data_images))/255;
+                input_image[i] = (float)(fgetc(test_data_images))/255;
             }
 
             //inputting label
             answer = fgetc(test_data_labels);
 
             //forward pass
+            convolution_single_to_multi(input_image, first_conv_filter, first_conv_layer_pre_activation, 28, 28, n_of_first_channel);
+            add_bias_conv(first_conv_layer_pre_activation, first_conv_bias, n_of_first_channel, (28 - filter_hight + 1), (28 - filter_width + 1));
+            for (size_t i = 0; i < n_of_first_channel; i++)
+            {
+                relu(first_conv_layer_pre_activation[i].layer, first_conv_layer_activation[i].layer, (28 - filter_hight + 1) * (28 - filter_width + 1));
+            }
+
+            maxpool(first_conv_layer_activation, first_maxpooling_layer, n_of_first_channel, (28 - filter_hight + 1), (28 - filter_width + 1), 2);
+            
+            convolution_multi_to_multi(first_maxpooling_layer, second_conv_filter, second_conv_layer_pre_activation, (28 - filter_hight + 1)/2, (28 - filter_width + 1)/2, n_of_first_channel, n_of_second_channel);
+            add_bias_conv(second_conv_layer_pre_activation, second_conv_bias, n_of_second_channel, ((28 - filter_hight + 1)/2 - filter_hight + 1), ((28 - filter_width + 1)/2 - filter_width + 1));
+            for (size_t i = 0; i < n_of_second_channel; i++)
+            {
+                relu(second_conv_layer_pre_activation[i].layer, second_conv_layer_activation[i].layer, ((28 - filter_hight + 1)/2 - filter_hight + 1) * ((28 - filter_width + 1)/2 - filter_width + 1));
+            }
+
+            maxpool(second_conv_layer_activation, second_maxpooling_layer, n_of_second_channel, ((28 - filter_hight + 1)/2 - filter_hight + 1), ((28 - filter_width + 1)/2 - filter_width + 1), 2);
+
+            flatten(input_layer, second_maxpooling_layer, n_of_second_channel, ((28 - filter_hight + 1)/2 - filter_hight + 1)/2, ((28 - filter_width + 1)/2 - filter_width + 1)/2);
+            
+            if (avx2 == true) {
+                mat_vec_mul(weight_to_first_hidden_layer, input_layer, z1, n_of_first_hidden_layer, n_of_input_layer);
+                vec_add_avx(z1, bias_of_first_hidden_layer, z1, n_of_first_hidden_layer);
+            }
+            else {
+                mmul(z1, input_layer, weight_to_first_hidden_layer, n_of_first_hidden_layer, n_of_input_layer);
+                add_bias(z1, bias_of_first_hidden_layer, n_of_first_hidden_layer);
+            }
+            relu(z1, first_hidden_layer, n_of_first_hidden_layer);
+
+            if (avx2 == true) {
+                mat_vec_mul(weight_to_output_layer, first_hidden_layer, zout, n_of_output_layer, n_of_first_hidden_layer);
+                vec_add_avx(zout, bias_of_output_layer, zout, n_of_output_layer);
+            }
+            else {
+                mmul(zout, first_hidden_layer, weight_to_output_layer, n_of_output_layer, n_of_first_hidden_layer);
+                add_bias(zout, bias_of_output_layer, n_of_output_layer);
+            }
+            softmax(zout, output_layer, n_of_output_layer);
 
             for (int i = 0; i < n_of_output_layer; i++)
             {
@@ -1379,10 +1478,10 @@ int main (void){
                 loss += answer_arr[i] * logf(output_layer[i] + 1e-8f);
             }
             loss = -loss;
-            if (L2_regularization)
+            /*if (L2_regularization)
             {
                 loss = loss + regularization_rate / 2 * L2_regularization_sum(weight_to_first_hidden_layer, weight_to_second_hidden_layer, weight_to_third_hidden_layer, weight_to_output_layer, n_of_input_layer, n_of_first_hidden_layer, n_of_second_hidden_layer, n_of_third_hidden_layer, n_of_output_layer);
-            }
+            }*/
             avg_loss += loss;
             if (find_max_index(output_layer, n_of_output_layer) == answer)
             {
@@ -1396,51 +1495,33 @@ int main (void){
     }
 
     //end
+    free(input_image);
     free(input_layer);
     free(first_hidden_layer);
-    //free(second_hidden_layer);
-    //free(third_hidden_layer);
     free(output_layer);
     free(weight_to_first_hidden_layer);
     free(bias_of_first_hidden_layer);
-    //free(weight_to_second_hidden_layer);
-    //free(bias_of_second_hidden_layer);
-    //free(weight_to_third_hidden_layer);
-    //free(bias_of_third_hidden_layer);
     free(weight_to_output_layer);
     free(bias_of_output_layer);
     free(z1);
-    //free(z2);
-    //free(z3);
     free(zout);
     free(delta_4);
-    //free(delta_3);
-    //free(delta_2);
     free(delta_1);
     free(grad_to_b1);
-    //free(grad_to_b2);
-    //free(grad_to_b3);
     free(grad_to_b4);
     free(grad_to_w1);
-    //free(grad_to_w2);
-    //free(grad_to_w3);
     free(grad_to_w4);
     free(grad_to_b1t);
-    //free(grad_to_b2t);
-    //free(grad_to_b3t);
     free(grad_to_b4t);
     free(grad_to_w1t);
-    //free(grad_to_w2t);
-    //free(grad_to_w3t);
     free(grad_to_w4t);
     free(dropout_mask_for_first_hidden_layer);
-    free(m_w1);
-    free(m_w4);
+    /*free(m_w1);
     free(m_b1);
     free(m_b4);
     free(v_w1);
     free(v_w4);
-    free(v_b4);
+    free(v_b4);*/
     free(delta_in);
     input_layer = NULL;
     first_hidden_layer = NULL;
@@ -1461,7 +1542,7 @@ int main (void){
     grad_to_b4t = NULL;
     grad_to_w1t = NULL;
     grad_to_b4t = NULL;
-    free_workspace(ws, 4);
+    //free_workspace(ws, 4);
     free_conv_layer(first_conv_layer_pre_activation, n_of_first_channel);
     free_conv_layer(first_conv_layer_activation, n_of_first_channel);
     free_conv_layer(second_conv_layer_pre_activation, n_of_second_channel);
@@ -1472,6 +1553,10 @@ int main (void){
     free_maxpool_layer(second_maxpooling_layer, n_of_second_channel);
     free_maxpool_layer(backward_second_maxpool, n_of_second_channel);
     free_conv_layer(backward_second_conv, n_of_second_channel);
+    free_maxpool_layer(backward_first_maxpool, n_of_first_channel);
+    free_conv_layer(backward_first_conv, n_of_first_channel);
+    free_filter(grad_to_first_conv_filter, n_of_first_channel);
+    free_filter(grad_to_second_conv_filter, n_of_first_channel * n_of_second_channel);
     free(first_conv_bias);
     free(second_conv_bias);
     fclose(learning_data_images);
