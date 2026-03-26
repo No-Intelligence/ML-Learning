@@ -13,9 +13,9 @@
 #define n_of_input_layer 1600
 #define n_of_first_hidden_layer 128
 #define n_of_output_layer 10
-#define learning_rate 0.001
-#define batch_size 128
-#define epoch 10
+#define learning_rate 0.002
+#define batch_size 160
+#define epoch 1
 #define debug 1
 #define neck_check 0
 #define threaded 0
@@ -197,7 +197,6 @@ void apply_dropout (float *operated_arr, bool *mask, int batch, int n_of_arr) {
 }
 
 void generate_dropout_mask (bool *dropout_mask, int number_of_mask) {
-    srand(time(NULL));
     for (size_t i = 0; i < number_of_mask; i++)
     {
         if ((float)(rand())/RAND_MAX <= dropout_rate)
@@ -558,89 +557,117 @@ int find_max_index (float *arr, int size){
     return max_index;
 }
 
-void convolution_single_to_multi (float *input_layer, conv_filter_t *f, conv_layer_t *l, int n_input_hight, int n_input_width, int n_output_channel) {
-    //standby
-    int output_hight = n_input_hight - filter_hight + 1;    //もとの高さとフィルターの高さから畳み込み後の高さを計算
-    int output_width = n_input_width - filter_width + 1;    //もとの幅とフィルターの幅から畳み込み後の幅を計算
-    conv_filter_t* conv_filter = f;
-    conv_layer_t* conv_layer = l;
+void convolution_single_to_multi(float *input_layer, conv_filter_t *f, conv_layer_t *l, int n_input_hight, int n_input_width, int n_output_channel) {
+    // Calculations for dimensions
+    // 変数名は元のコードのスペルミス(hight)を踏襲しています
+    int output_hight = n_input_hight - filter_hight + 1;
+    int output_width = n_input_width - filter_width + 1;
+    int output_size = output_hight * output_width;
 
-    //zero fill
-    for (size_t i = 0; i < n_output_channel; i++)
-    {
-        for (size_t j = 0; j < output_hight * output_width; j++)
-        {
-            conv_layer[i].layer[j] = 0.0f;
+    // 各出力チャンネルごとに処理
+    for (int oc = 0; oc < n_output_channel; oc++) {
+        // ポインタを一度だけ取得（ループ内での構造体アクセス回避）
+        float *restrict out_ptr = l[oc].layer;
+        const float *restrict filter_ptr = f[oc].filter;
+
+        // ゼロ初期化
+        // memsetや単純なループで展開可能。コンパイラが最適化しやすい形にします。
+        for (int i = 0; i < output_size; i++) {
+            out_ptr[i] = 0.0f;
         }
+
+        // 畳み込み処理
+        // 元のコード: 出力ピクセル(oh,ow) -> フィルタ
+        // 最適化後: フィルタ -> 出力ピクセル(oh,ow)
+        // これにより、out_ptrとinput_layerへのアクセスが連続メモリアクセスになり、
+        // SIMD命令による並列化が可能になります。
         
-    }
-    
-    for (size_t oc = 0; oc < n_output_channel; oc++)
-    {
-        for (size_t oh = 0; oh < output_hight; oh++)
-        {
-            for (size_t ow = 0; ow < output_width; ow++)
-            {
-                for (size_t kh = 0; kh < filter_hight; kh++)
-                {
-                    for (size_t kw = 0; kw < filter_width; kw++)
-                    {
-                        conv_layer[oc].layer[output_width * oh +  ow] += conv_filter[oc].filter[filter_width * kh + kw] * input_layer[n_input_width * oh + ow + n_input_width * kh + kw];
-                    }
-                    
-                }
+        for (int kh = 0; kh < filter_hight; kh++) {
+            int input_row_offset = kh * n_input_width;
+            int filter_row_offset = kh * filter_width;
+
+            for (int kw = 0; kw < filter_width; kw++) {
+                float weight = filter_ptr[filter_row_offset + kw];
                 
+                // 入力画像の開始位置（kwとkhのオフセットを適用）
+                const float *restrict in_ptr = input_layer + input_row_offset + kw;
+
+                // 行ごとのスキャン
+                for (int oh = 0; oh < output_hight; oh++) {
+                    int out_row_start = oh * output_width;
+                    int in_row_start = oh * n_input_width;
+                    
+                    // この内側のループがベクトル化（SIMD化）の対象になります
+                    // out_ptr[row_start + ow] += weight * in_ptr[in_row_start + ow];
+                    // という処理をポインタ演算で記述します。
+                    
+                    float *restrict out_row = out_ptr + out_row_start;
+                    const float *restrict in_row = in_ptr + in_row_start;
+
+                    for (int ow = 0; ow < output_width; ow++) {
+                        out_row[ow] += weight * in_row[ow];
+                    }
+                }
             }
-            
         }
-        
     }
-    
 }
 
 /**
  * @param input conv_layer_tではなくmaxpool_layer_tであることに注意
  */
-void convolution_multi_to_multi (maxpool_layer_t *input, conv_filter_t *filter, conv_layer_t *output, int n_input_hight, int n_input_width, int n_input_channel, int n_output_channel) {
-    //standby
+/**
+ * @param input conv_layer_tではなくmaxpool_layer_tであることに注意
+ */
+void convolution_multi_to_multi(maxpool_layer_t *input, conv_filter_t *filter, conv_layer_t *output, int n_input_hight, int n_input_width, int n_input_channel, int n_output_channel) {
+    // Dimensions
     int n_output_hight = n_input_hight - filter_hight + 1;
     int n_output_width = n_input_width - filter_width + 1;
+    int n_output_size = n_output_hight * n_output_width;
 
-    //zero fill
-    for (size_t i = 0; i < n_output_channel; i++)
-    {
-        for (size_t j = 0; j < n_output_hight * n_output_width; j++)
-        {
-            output[i].layer[j] = 0.0f;
+    // 出力チャンネルごとのループ
+    for (int oc = 0; oc < n_output_channel; oc++) {
+        // ポインタのキャッシュ（構造体アクセスの削減）
+        float *restrict out_ptr = output[oc].layer;
+
+        // ゼロ初期化
+        for (int i = 0; i < n_output_size; i++) {
+            out_ptr[i] = 0.0f;
         }
-        
-    }
 
-    for (size_t oc = 0; oc < n_output_channel; oc++)
-    {
-        for (size_t ic = 0; ic < n_input_channel; ic++)
-        {
-            for (size_t oh = 0; oh < n_output_hight; oh++)
-            {
-                for (size_t ow = 0; ow < n_output_width; ow++)
-                {
-                    for (size_t kh = 0; kh < filter_hight; kh++)
-                    {
-                        for (size_t kw = 0; kw < filter_width; kw++)
-                        {
-                            output[oc].layer[n_output_width * oh + ow] += filter[n_input_channel * oc + ic].filter[filter_width * kh + kw] * input[ic].layer[n_input_width * kh  + n_input_width * oh + kw + ow];
-                        }
-                        
-                    }
-                    
-                }
+        // 入力チャンネルごとの累積ループ
+        for (int ic = 0; ic < n_input_channel; ic++) {
+            // フィルタと入力のポインタを取得
+            // 元のコード: filter[n_input_channel * oc + ic] のアクセス順序を維持
+            const float *restrict filter_ptr = filter[n_input_channel * oc + ic].filter;
+            const float *restrict in_ptr = input[ic].layer;
+
+            // フィルタの高さ・幅のループ（外側へ移動）
+            for (int kh = 0; kh < filter_hight; kh++) {
+                int filter_row_offset = kh * filter_width;
                 
+                for (int kw = 0; kw < filter_width; kw++) {
+                    float weight = filter_ptr[filter_row_offset + kw];
+
+                    // 入力画像における開始位置のオフセット
+                    // input[ (oh + kh) * width + (ow + kw) ] となるように調整
+                    const float *restrict in_start = in_ptr + kh * n_input_width + kw;
+
+                    // 画像の高さ・幅のループ（内側へ移動）
+                    // ここでSIMD並列化が効きます
+                    for (int oh = 0; oh < n_output_hight; oh++) {
+                        float *restrict out_row = out_ptr + oh * n_output_width;
+                        const float *restrict in_row = in_start + oh * n_input_width;
+
+                        for (int ow = 0; ow < n_output_width; ow++) {
+                            // 連続したメモリへのアクセス
+                            out_row[ow] += weight * in_row[ow];
+                        }
+                    }
+                }
             }
-            
         }
-        
     }
-    
 }
 
 void maxpool(conv_layer_t *input, maxpool_layer_t *output, int channels, int in_h, int in_w, int pool_size) {
@@ -969,11 +996,12 @@ void* training_threaded (void* arg){
 }
 
 int main (void){
+    srand(time(NULL));
     //define variables
     int answer = 0, hit = 0;
     float answer_arr[n_of_output_layer] = {0.0f};
     float loss = 0.0f, avg_loss = 0.0f;
-    int order_indices[60000];
+    int *order_indices = calloc(60000, sizeof(int));
     for (int i = 0; i < 60000; i++)
     {
         order_indices[i] = i;
@@ -1053,7 +1081,6 @@ int main (void){
     float *grad_to_b_conv1_t = calloc(n_of_first_channel, sizeof(float));
     float *grad_to_b_conv2_t = calloc(n_of_second_channel, sizeof(float));
     
-
     //thread_workspace_t *ws = alloc_workspace(4);
     bool *dropout_mask_for_first_hidden_layer = malloc(n_of_first_hidden_layer * (60000/batch_size));
 
@@ -1061,7 +1088,6 @@ int main (void){
     FILE *learning_data_images, *learning_data_labels, *test_data_images, *test_data_labels, *fp;
 
     //weight initialize
-    srand(time(NULL));
     he_initialize_uniform(weight_to_first_hidden_layer, n_of_input_layer, n_of_first_hidden_layer);
     he_initialize_uniform(weight_to_output_layer, n_of_first_hidden_layer, n_of_output_layer);
     // 第1畳み込み層の初期化 (fan_in = 1 * filter_hight * filter_width)
@@ -1337,24 +1363,24 @@ int main (void){
 
             //forward pass
             convolution_single_to_multi(input_image, first_conv_filter, first_conv_layer_pre_activation, 28, 28, n_of_first_channel);
-            add_bias_conv(first_conv_layer_pre_activation, first_conv_bias, n_of_first_channel, (28 - filter_hight + 1), (28 - filter_hight + 1));
+            add_bias_conv(first_conv_layer_pre_activation, first_conv_bias, n_of_first_channel, (28 - filter_hight + 1), (28 - filter_width + 1));
             for (size_t i = 0; i < n_of_first_channel; i++)
             {
-                relu(first_conv_layer_pre_activation[i].layer, first_conv_layer_activation[i].layer, (28 - filter_hight + 1) * (28 - filter_hight + 1));
+                relu(first_conv_layer_pre_activation[i].layer, first_conv_layer_activation[i].layer, (28 - filter_hight + 1) * (28 - filter_width + 1));
             }
 
-            maxpool(first_conv_layer_activation, first_maxpooling_layer, n_of_first_channel, (28 - filter_hight + 1), (28 - filter_hight + 1), 2);
+            maxpool(first_conv_layer_activation, first_maxpooling_layer, n_of_first_channel, (28 - filter_hight + 1), (28 - filter_width + 1), 2);
             
-            convolution_multi_to_multi(first_maxpooling_layer, second_conv_filter, second_conv_layer_pre_activation, (28 - filter_hight + 1)/2, (28 - filter_hight + 1)/2, n_of_first_channel, n_of_second_channel);
-            add_bias_conv(second_conv_layer_pre_activation, second_conv_bias, n_of_second_channel, ((28 - filter_hight + 1)/2 - filter_hight + 1), ((28 - filter_hight + 1)/2 - filter_hight + 1));
+            convolution_multi_to_multi(first_maxpooling_layer, second_conv_filter, second_conv_layer_pre_activation, (28 - filter_hight + 1)/2, (28 - filter_width + 1)/2, n_of_first_channel, n_of_second_channel);
+            add_bias_conv(second_conv_layer_pre_activation, second_conv_bias, n_of_second_channel, ((28 - filter_hight + 1)/2 - filter_hight + 1), ((28 - filter_width + 1)/2 - filter_width + 1));
             for (size_t i = 0; i < n_of_second_channel; i++)
             {
-                relu(second_conv_layer_pre_activation[i].layer, second_conv_layer_activation[i].layer, ((28 - filter_hight + 1)/2 - filter_hight + 1) * ((28 - filter_hight + 1)/2 - filter_hight + 1));
+                relu(second_conv_layer_pre_activation[i].layer, second_conv_layer_activation[i].layer, ((28 - filter_hight + 1)/2 - filter_hight + 1) * ((28 - filter_width + 1)/2 - filter_width + 1));
             }
 
-            maxpool(second_conv_layer_activation, second_maxpooling_layer, n_of_second_channel, ((28 - filter_hight + 1)/2 - filter_hight + 1), ((28 - filter_hight + 1)/2 - filter_hight + 1), 2);
+            maxpool(second_conv_layer_activation, second_maxpooling_layer, n_of_second_channel, ((28 - filter_hight + 1)/2 - filter_hight + 1), ((28 - filter_width + 1)/2 - filter_width + 1), 2);
 
-            flatten(input_layer, second_maxpooling_layer, n_of_second_channel, ((28 - filter_hight + 1)/2 - filter_hight + 1)/2, ((28 - filter_hight + 1)/2 - filter_hight + 1)/2);
+            flatten(input_layer, second_maxpooling_layer, n_of_second_channel, ((28 - filter_hight + 1)/2 - filter_hight + 1)/2, ((28 - filter_width + 1)/2 - filter_width + 1)/2);
             
             if (avx2 == true) {
                 mat_vec_mul(weight_to_first_hidden_layer, input_layer, z1, n_of_first_hidden_layer, n_of_input_layer);
@@ -1407,38 +1433,38 @@ int main (void){
 
             compute_hidden_activation_delta(delta_1, weight_to_first_hidden_layer, delta_in, n_of_input_layer, n_of_first_hidden_layer);
 
-            unflatten(backward_second_maxpool, delta_in, n_of_second_channel, ((28 - filter_hight + 1)/2 - filter_hight + 1)/2, ((28 - filter_hight + 1)/2 - filter_hight + 1)/2);
+            unflatten(backward_second_maxpool, delta_in, n_of_second_channel, ((28 - filter_hight + 1)/2 - filter_hight + 1)/2, ((28 - filter_width + 1)/2 - filter_width + 1)/2);
             
-            maxpool_backward(backward_second_maxpool, backward_second_conv, second_maxpooling_layer, n_of_second_channel, (28 - filter_hight + 1)/2 - filter_hight + 1, (28 - filter_hight + 1)/2 - filter_hight + 1, 2);
+            maxpool_backward(backward_second_maxpool, backward_second_conv, second_maxpooling_layer, n_of_second_channel, (28 - filter_hight + 1)/2 - filter_hight + 1, (28 - filter_width + 1)/2 - filter_width + 1, 2);
             
             for (size_t i = 0; i < n_of_second_channel; i++)
             {
-                backward_relu(backward_second_conv[i].layer, backward_second_conv[i].layer, second_conv_layer_pre_activation[i].layer, ((28 - filter_hight + 1)/2 - filter_hight + 1) * ((28 - filter_hight + 1)/2 - filter_hight + 1));
+                backward_relu(backward_second_conv[i].layer, backward_second_conv[i].layer, second_conv_layer_pre_activation[i].layer, ((28 - filter_hight + 1)/2 - filter_hight + 1) * ((28 - filter_width + 1)/2 - filter_width + 1));
             }
 
             //バイアス勾配
             for (size_t i = 0; i < n_of_second_channel; i++)
             {
-                grad_to_b_conv2[i] = float_array_sum(backward_second_conv[i].layer, ((28 - filter_hight + 1)/2 - filter_hight + 1) * ((28 - filter_hight + 1)/2 - filter_hight + 1));
+                grad_to_b_conv2[i] = float_array_sum(backward_second_conv[i].layer, ((28 - filter_hight + 1)/2 - filter_hight + 1) * ((28 - filter_width + 1)/2 - filter_width + 1));
             }
 
             //フィルター勾配
-            backward_conv_filter_multi_to_multi(grad_to_second_conv_filter, first_maxpooling_layer, backward_second_conv, n_of_second_channel, n_of_first_channel, (28 - filter_hight + 1)/2, (28 - filter_hight + 1)/2);
+            backward_conv_filter_multi_to_multi(grad_to_second_conv_filter, first_maxpooling_layer, backward_second_conv, n_of_second_channel, n_of_first_channel, (28 - filter_hight + 1)/2, (28 - filter_width + 1)/2);
 
             //前層アクティベーション勾配
-            backward_conv_layer(backward_first_maxpool, backward_second_conv, second_conv_filter, n_of_first_channel, n_of_second_channel, (28 - filter_hight + 1)/2, (28 - filter_hight + 1)/2);
+            backward_conv_layer(backward_first_maxpool, backward_second_conv, second_conv_filter, n_of_first_channel, n_of_second_channel, (28 - filter_hight + 1)/2, (28 - filter_width + 1)/2);
             
-            maxpool_backward(backward_first_maxpool, backward_first_conv, first_maxpooling_layer, n_of_first_channel, 28 - filter_hight + 1, 28 - filter_hight + 1, 2);
+            maxpool_backward(backward_first_maxpool, backward_first_conv, first_maxpooling_layer, n_of_first_channel, 28 - filter_hight + 1, 28 - filter_width + 1, 2);
             
             for (size_t i = 0; i < n_of_first_channel; i++)
             {
-                backward_relu(backward_first_conv[i].layer, backward_first_conv[i].layer, first_conv_layer_pre_activation[i].layer, (28 - filter_hight + 1) * (28 - filter_hight + 1));
+                backward_relu(backward_first_conv[i].layer, backward_first_conv[i].layer, first_conv_layer_pre_activation[i].layer, (28 - filter_hight + 1) * (28 - filter_width + 1));
             }
 
             //バイアス勾配
             for (size_t i = 0; i < n_of_first_channel; i++)
             {
-                grad_to_b_conv1[i] = float_array_sum(backward_first_conv[i].layer, (28 - filter_hight + 1) * (28 - filter_hight + 1));
+                grad_to_b_conv1[i] = float_array_sum(backward_first_conv[i].layer, (28 - filter_hight + 1) * (28 - filter_width + 1));
             }
 
             //フィルター勾配
@@ -1584,22 +1610,6 @@ int main (void){
                 }
 
                 batch++;
-                for (size_t i = 0; i < n_of_input_layer * n_of_first_hidden_layer; i++)
-                {
-                    grad_to_w1t[i] = 0;
-                }
-                for (size_t i = 0; i < n_of_first_hidden_layer; i++)
-                {
-                    grad_to_b1t[i] = 0;
-                }
-                for (size_t i = 0; i < n_of_first_hidden_layer * n_of_output_layer; i++)
-                {
-                    grad_to_w4t[i] = 0;
-                }
-                for (size_t i = 0; i < n_of_output_layer; i++)
-                {
-                    grad_to_b4t[i] = 0;
-                }
                 for (size_t c = 0; c < n_of_first_channel; c++)
                 {
                     for (size_t h = 0; h < filter_hight; h++)
@@ -1773,7 +1783,7 @@ int main (void){
     grad_to_b1t = NULL;
     grad_to_b4t = NULL;
     grad_to_w1t = NULL;
-    grad_to_b4t = NULL;
+    grad_to_w4t = NULL;
     //free_workspace(ws, 4);
     free_conv_layer(first_conv_layer_pre_activation, n_of_first_channel);
     free_conv_layer(first_conv_layer_activation, n_of_first_channel);
@@ -1791,6 +1801,11 @@ int main (void){
     free_filter(grad_to_second_conv_filter, n_of_first_channel * n_of_second_channel);
     free(first_conv_bias);
     free(second_conv_bias);
+    free_filter(grad_to_first_conv_filter_t, n_of_first_channel);
+    free_filter(grad_to_second_conv_filter_t, n_of_first_channel * n_of_second_channel);
+    free(grad_to_b_conv1_t);
+    free(grad_to_b_conv2_t);
+    free(order_indices);
     fclose(learning_data_images);
     fclose(learning_data_labels);
     fclose(test_data_images);
