@@ -10,8 +10,8 @@
 #include <immintrin.h>
 
 // ブロックサイズ（L1/L2キャッシュサイズに応じて調整）
-#define BLOCK_H 16
-#define BLOCK_W 16
+#define BLOCK_H 64
+#define BLOCK_W 64
 
 #define PI 3.14159265358979
 #define n_of_input_layer 1600
@@ -217,7 +217,7 @@ void generate_dropout_mask (bool *dropout_mask, int number_of_mask) {
 void add_weight (float *grad, float *weight, int n_of_grad) {
     for (size_t i = 0; i < n_of_grad; i++)
     {
-        grad[i] += (regularization_rate * weight[i]) / batch_size;
+        grad[i] += (regularization_rate * weight[i]);
     }
     
 }
@@ -1399,15 +1399,15 @@ int main (void){
             }
             loss = -loss;
             //L2 regularization
-            loss += f_arr_squared_sum(weight_to_output_layer, n_of_output_layer * n_of_first_hidden_layer);
-            loss += f_arr_squared_sum(weight_to_first_hidden_layer, n_of_first_hidden_layer * n_of_input_layer);
+            loss += (regularization_rate / 2.0f) *f_arr_squared_sum(weight_to_output_layer, n_of_output_layer * n_of_first_hidden_layer);
+            loss += (regularization_rate / 2.0f) *f_arr_squared_sum(weight_to_first_hidden_layer, n_of_first_hidden_layer * n_of_input_layer);
             for (size_t c = 0; c < n_of_first_channel; c++)
             {
-                loss += f_arr_squared_sum(first_conv_filter[c].filter, filter_hight * filter_width);   
+                loss += (regularization_rate / 2.0f) *f_arr_squared_sum(first_conv_filter[c].filter, filter_hight * filter_width);   
             }
             for (size_t c = 0; c < n_of_first_channel * n_of_second_channel; c++)
             {
-                loss += f_arr_squared_sum(second_conv_filter[c].filter, filter_hight * filter_width);   
+                loss += (regularization_rate / 2.0f) *f_arr_squared_sum(second_conv_filter[c].filter, filter_hight * filter_width);   
             }
             avg_loss += loss;
             
@@ -1415,14 +1415,12 @@ int main (void){
             compute_output_delta(delta_4, output_layer, answer_arr, n_of_output_layer);
 
             weight_grad(delta_4, first_hidden_layer, grad_to_w4, n_of_output_layer, n_of_first_hidden_layer);
-            add_weight(grad_to_w4, weight_to_output_layer, n_of_output_layer * n_of_first_hidden_layer);
             grad_bias(delta_4, grad_to_b4, n_of_output_layer);
 
             compute_hidden_delta(delta_4, weight_to_output_layer, z1, delta_1, n_of_first_hidden_layer, n_of_output_layer);
             if (dropout == 1) {apply_dropout(delta_1, dropout_mask_for_first_hidden_layer, batch, n_of_first_hidden_layer);}
 
             weight_grad(delta_1, input_layer, grad_to_w1, n_of_first_hidden_layer, n_of_input_layer);
-            add_weight(grad_to_w1, weight_to_first_hidden_layer, n_of_first_hidden_layer * n_of_input_layer);
             grad_bias(delta_1, grad_to_b1, n_of_first_hidden_layer);
 
             compute_hidden_activation_delta(delta_1, weight_to_first_hidden_layer, delta_in, n_of_input_layer, n_of_first_hidden_layer);
@@ -1444,10 +1442,6 @@ int main (void){
 
             //フィルター勾配
             backward_conv_filter_multi_to_multi(grad_to_second_conv_filter, first_maxpooling_layer, backward_second_conv, n_of_second_channel, n_of_first_channel, (28 - filter_hight + 1)/2, (28 - filter_width + 1)/2);
-            for (size_t c = 0; c < n_of_second_channel * n_of_first_channel; c++)
-            {
-                add_weight(grad_to_second_conv_filter[c].filter, second_conv_filter[c].filter, filter_hight * filter_width);
-            }
             
 
             //前層アクティベーション勾配
@@ -1468,10 +1462,6 @@ int main (void){
 
             //フィルター勾配
             backward_conv_filter_single_to_multi(grad_to_first_conv_filter, input_image, backward_first_conv, n_of_first_channel, 28, 28);
-            for (size_t c = 0; c < n_of_first_channel; c++)
-            {
-                add_weight(grad_to_first_conv_filter[c].filter, first_conv_filter[c].filter, filter_hight * filter_width);
-            }
             
 
 
@@ -1574,6 +1564,18 @@ int main (void){
                 {
                     grad_to_b_conv2_t[i] /= batch_size;
                 }
+
+                add_weight(grad_to_w1t, weight_to_first_hidden_layer, n_of_input_layer * n_of_first_hidden_layer);
+                add_weight(grad_to_w4t, weight_to_output_layer, n_of_first_hidden_layer * n_of_output_layer);
+                for (size_t c = 0; c < n_of_first_channel; c++)
+                {
+                    add_weight(grad_to_first_conv_filter_t[c].filter, first_conv_filter[c].filter, filter_hight * filter_width); 
+                }
+                for (size_t c = 0; c < n_of_first_channel * n_of_second_channel; c++)
+                {
+                    add_weight(grad_to_second_conv_filter_t[c].filter, second_conv_filter[c].filter, filter_hight * filter_width); 
+                }
+                
 
                 if (adam == false) {
                     update_params(weight_to_first_hidden_layer, grad_to_w1t, bias_of_first_hidden_layer, grad_to_b1t, n_of_input_layer * n_of_first_hidden_layer, n_of_first_hidden_layer);
@@ -1728,15 +1730,15 @@ int main (void){
             }
             loss = -loss;
             //L2 regularization
-            loss += f_arr_squared_sum(weight_to_output_layer, n_of_output_layer * n_of_first_hidden_layer);
-            loss += f_arr_squared_sum(weight_to_first_hidden_layer, n_of_first_hidden_layer * n_of_input_layer);
+            loss += (regularization_rate / 2.0f) *f_arr_squared_sum(weight_to_output_layer, n_of_output_layer * n_of_first_hidden_layer);
+            loss += (regularization_rate / 2.0f) *f_arr_squared_sum(weight_to_first_hidden_layer, n_of_first_hidden_layer * n_of_input_layer);
             for (size_t c = 0; c < n_of_first_channel; c++)
             {
-                loss += f_arr_squared_sum(first_conv_filter[c].filter, filter_hight * filter_width);   
+                loss += (regularization_rate / 2.0f) *f_arr_squared_sum(first_conv_filter[c].filter, filter_hight * filter_width);   
             }
             for (size_t c = 0; c < n_of_first_channel * n_of_second_channel; c++)
             {
-                loss += f_arr_squared_sum(second_conv_filter[c].filter, filter_hight * filter_width);   
+                loss += (regularization_rate / 2.0f) *f_arr_squared_sum(second_conv_filter[c].filter, filter_hight * filter_width);   
             }
             avg_loss += loss;
             if (find_max_index(output_layer, n_of_output_layer) == answer)
