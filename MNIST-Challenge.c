@@ -17,19 +17,16 @@
 #define n_of_input_layer 1600
 #define n_of_first_hidden_layer 128
 #define n_of_output_layer 10
-#define learning_rate 0.0025
+#define learning_rate 0.001
+#define momentum_beta 0.9f
 #define batch_size 160
-#define epoch 1
+#define epoch 15
 #define debug 1
 #define neck_check 0
 #define threaded 0
 #define regularization_rate 0.0005f
 #define dropout 0
 #define dropout_rate 0.3f
-#define adam false
-#define adam_beta1 0.9f
-#define adam_beta2 0.999f
-#define adam_epsilon 1e-8f
 #define avx2 false
 
 //convolutional layer param
@@ -38,10 +35,10 @@
 #define n_of_first_channel 32
 #define n_of_second_channel 64
 
-#define train_images "train-images-fashion.idx3-ubyte"
-#define train_labels "train-labels-fashion.idx1-ubyte"
-#define test_images "t10k-images-fashion.idx3-ubyte"
-#define test_labels "t10k-labels-fashion.idx1-ubyte"
+#define train_images "train-images.idx3-ubyte"
+#define train_labels "train-labels.idx1-ubyte"
+#define test_images "t10k-images.idx3-ubyte"
+#define test_labels "t10k-labels.idx1-ubyte"
 
 typedef struct {
     float *layer;
@@ -138,32 +135,18 @@ thread_workspace_t* alloc_workspace (int n_threads) {
         p[i].training_label_buffer = malloc(batch_size / 4 * sizeof(uint8_t));
         p[i].a_in = malloc(n_of_input_layer * sizeof(float));
         p[i].a_1 = malloc(n_of_first_hidden_layer * sizeof(float));
-        //p[i].a_2 = malloc(n_of_second_hidden_layer * sizeof(float));
-        //p[i].a_3 = malloc(n_of_third_hidden_layer * sizeof(float));
         p[i].a_out = malloc(n_of_output_layer * sizeof(float));
         p[i].z_1 = malloc(n_of_first_hidden_layer * sizeof(float));
-        //p[i].z_2 = malloc(n_of_second_hidden_layer * sizeof(float));
-        //p[i].z_3 = malloc(n_of_third_hidden_layer * sizeof(float));
         p[i].z_out = malloc(n_of_output_layer * sizeof(float));
         p[i].delta_1 = malloc(n_of_first_hidden_layer * sizeof(float));
-        //p[i].delta_2 = malloc(n_of_second_hidden_layer * sizeof(float));
-        //p[i].delta_3 = malloc(n_of_third_hidden_layer * sizeof(float));
         p[i].delta_4 = malloc(n_of_output_layer * sizeof(float));
         p[i].grad_w1 = malloc(n_of_input_layer * n_of_first_hidden_layer * sizeof(float));
-        //p[i].grad_w2 = malloc(n_of_first_hidden_layer * n_of_second_hidden_layer * sizeof(float));
-        //p[i].grad_w3 = malloc(n_of_second_hidden_layer * n_of_third_hidden_layer * sizeof(float));
-        //p[i].grad_w4 = malloc(n_of_third_hidden_layer * n_of_output_layer * sizeof(float));
+        p[i].grad_w4 = malloc(n_of_first_hidden_layer * n_of_output_layer * sizeof(float));
         p[i].grad_b1 = malloc(n_of_first_hidden_layer * sizeof(float));
-        //p[i].grad_b2 = malloc(n_of_second_hidden_layer * sizeof(float));
-        //p[i].grad_b3 = malloc(n_of_third_hidden_layer * sizeof(float));
         p[i].grad_b4 = malloc(n_of_output_layer * sizeof(float));
         p[i].grad_w1t = malloc(n_of_input_layer * n_of_first_hidden_layer * sizeof(float));
-        //p[i].grad_w2t = malloc(n_of_first_hidden_layer * n_of_second_hidden_layer * sizeof(float));
-        //p[i].grad_w3t = malloc(n_of_second_hidden_layer * n_of_third_hidden_layer * sizeof(float));
-        //p[i].grad_w4t = malloc(n_of_third_hidden_layer * n_of_output_layer * sizeof(float));
+        p[i].grad_w4t = malloc(n_of_first_hidden_layer * n_of_output_layer * sizeof(float));
         p[i].grad_b1t = malloc(n_of_first_hidden_layer * sizeof(float));
-        //p[i].grad_b2t = malloc(n_of_second_hidden_layer * sizeof(float));
-        //p[i].grad_b3t = malloc(n_of_third_hidden_layer * sizeof(float));
         p[i].grad_b4t = malloc(n_of_output_layer * sizeof(float));
     }
     return p;
@@ -477,45 +460,41 @@ void compute_hidden_delta_leaky (float *z_delta, float *next_weight, float *z, f
     
 }
 
-void update_params(float *weight, float *weight_grad, float *bias, float *bias_grad, int n_of_weight, int n_of_bias){
+void momentum_update(float *weight, float *weight_grad, float *velocity_weight_grad, float *bias, float *bias_grad, float *velocity_bias_grad, int n_of_weight, int n_of_bias){
     for (int i = 0; i < n_of_weight; i++)
     {
-        weight[i] += -1 * learning_rate * weight_grad[i];
+        velocity_weight_grad[i] = momentum_beta * velocity_weight_grad[i] + weight_grad[i];
+        weight[i] -= learning_rate * velocity_weight_grad[i];
         weight_grad[i] = 0.0f;
     }
     for (int i = 0; i < n_of_bias; i++)
     {
-        bias[i] += -1 * learning_rate * bias_grad[i];
+        velocity_bias_grad[i] = momentum_beta * velocity_bias_grad[i] + bias_grad[i];
+        bias[i] -= learning_rate * velocity_bias_grad[i];
         bias_grad[i] = 0.0f;
     }
-    
 }
 
-void adam_update (float *weight, float *grad_w, float *m_w, float *v_w, int n_w, float *bias, float *grad_b, float *m_b, float *v_b, int n_b, int t) {
-    float bc1 = 1.0f - powf(adam_beta1, t);
-    float bc2 = 1.0f - powf(adam_beta2, t);
-
-    for (size_t i = 0; i < n_w; i++)
+void momentum_update_conv (conv_filter_t *filter, conv_filter_t *filter_grad, conv_filter_t *velocity_filter_grad, float *bias, float *bias_grad, float *velocity_bias_grad, int n_of_filter, int n_of_bias){
+    for (size_t c = 0; c < n_of_filter; c++)
     {
-        m_w[i] = adam_beta1 * m_w[i] + (1.0f - adam_beta1) * grad_w[i];
-        v_w[i] = adam_beta2 * v_w[i] + (1.0f - adam_beta2) * grad_w[i] * grad_w[i];
-
-        float m_hat = m_w[i] / bc1;
-        float v_hat = v_w[i] / bc2;
-
-        weight[i] -= learning_rate * m_hat /(sqrt(v_hat) + adam_epsilon);
-        grad_w[i] = 0.0f;
+        for (size_t h = 0; h < filter_hight; h++)
+        {
+            for (size_t w = 0; w < filter_width; w++)
+            {
+                velocity_filter_grad[c].filter[h * filter_width + w] = momentum_beta * velocity_filter_grad[c].filter[h * filter_width + w] + filter_grad[c].filter[h * filter_width + w];
+                filter[c].filter[h * filter_width + w] -= learning_rate * velocity_filter_grad[c].filter[h * filter_width + w];
+                filter_grad[c].filter[h * filter_width + w] = 0.0f;
+            }
+            
+        }
+        
     }
-    
-    for (int i = 0; i < n_b; i++) {
-        m_b[i] = adam_beta1 * m_b[i] + (1.0f - adam_beta1) * grad_b[i];
-        v_b[i] = adam_beta2 * v_b[i] + (1.0f - adam_beta2) * grad_b[i] * grad_b[i];
-
-        float m_hat = m_b[i] / bc1;
-        float v_hat = v_b[i] / bc2;
-
-        bias[i] -= learning_rate * m_hat / (sqrtf(v_hat) + adam_epsilon);
-        grad_b[i] = 0.0f;
+    for (int i = 0; i < n_of_bias; i++)
+    {
+        velocity_bias_grad[i] = momentum_beta * velocity_bias_grad[i] + bias_grad[i];
+        bias[i] -= learning_rate * velocity_bias_grad[i];
+        bias_grad[i] = 0.0f;
     }
 }
 
@@ -1033,12 +1012,6 @@ int main (void){
     grad_to_w1 = (float*)malloc(n_of_input_layer * n_of_first_hidden_layer * sizeof(float));
     grad_to_b4 = (float*)malloc(n_of_output_layer * sizeof(float));
     grad_to_b1 = (float*)malloc(n_of_first_hidden_layer * sizeof(float));
-    /*m_w1 = calloc(n_of_input_layer * n_of_first_hidden_layer, sizeof(float));
-    m_b1 = calloc(n_of_first_hidden_layer, sizeof(float));
-    m_b4 = calloc(n_of_output_layer, sizeof(float));
-    v_w1 = calloc(n_of_input_layer * n_of_first_hidden_layer, sizeof(float));
-    v_b1 = calloc(n_of_first_hidden_layer, sizeof(float));
-    v_b4 = calloc(n_of_output_layer, sizeof(float));*/
     conv_layer_t *first_conv_layer_pre_activation = alloc_conv_layer(n_of_first_channel, 28 - filter_hight + 1, 28 - filter_width + 1);
     conv_layer_t *first_conv_layer_activation = alloc_conv_layer(n_of_first_channel, 28 - filter_hight + 1, 28 - filter_width + 1);
     conv_filter_t *first_conv_filter = alloc_filter(n_of_first_channel);
@@ -1065,7 +1038,17 @@ int main (void){
     conv_filter_t *grad_to_second_conv_filter_t = alloc_filter(n_of_first_channel * n_of_second_channel);
     float *grad_to_b_conv1_t = calloc(n_of_first_channel, sizeof(float));
     float *grad_to_b_conv2_t = calloc(n_of_second_channel, sizeof(float));
-    
+
+    //momentum buffer
+    float *velocity_grad_buffer_w1t = calloc(n_of_input_layer * n_of_first_hidden_layer, sizeof(float));
+    float *velocity_grad_buffer_w4t = calloc(n_of_first_hidden_layer * n_of_output_layer, sizeof(float));
+    float *velocity_grad_buffer_b1t = calloc(n_of_first_hidden_layer, sizeof(float));
+    float *velocity_grad_buffer_b4t = calloc(n_of_output_layer, sizeof(float));
+    conv_filter_t *velocity_grad_buffer_f1t = alloc_filter(n_of_first_channel);
+    conv_filter_t *velocity_grad_buffer_f2t = alloc_filter(n_of_first_channel * n_of_second_channel);
+    float *velocity_grad_buffer_conv_b1t = calloc(n_of_first_channel, sizeof(float));
+    float *velocity_grad_buffer_conv_b2t = calloc(n_of_second_channel, sizeof(float));
+
     //thread_workspace_t *ws = alloc_workspace(4);
     bool *dropout_mask_for_first_hidden_layer = malloc(n_of_first_hidden_layer * (60000/batch_size));
 
@@ -1516,6 +1499,7 @@ int main (void){
 
             //update params
             if (loop%batch_size == (batch_size-1)){
+                //average
                 for (size_t i = 0; i < n_of_input_layer * n_of_first_hidden_layer; i++)
                 {
                     grad_to_w1t[i] /= batch_size;
@@ -1565,6 +1549,7 @@ int main (void){
                     grad_to_b_conv2_t[i] /= batch_size;
                 }
 
+                //L2 
                 add_weight(grad_to_w1t, weight_to_first_hidden_layer, n_of_input_layer * n_of_first_hidden_layer);
                 add_weight(grad_to_w4t, weight_to_output_layer, n_of_first_hidden_layer * n_of_output_layer);
                 for (size_t c = 0; c < n_of_first_channel; c++)
@@ -1575,48 +1560,12 @@ int main (void){
                 {
                     add_weight(grad_to_second_conv_filter_t[c].filter, second_conv_filter[c].filter, filter_hight * filter_width); 
                 }
-                
 
-                if (adam == false) {
-                    update_params(weight_to_first_hidden_layer, grad_to_w1t, bias_of_first_hidden_layer, grad_to_b1t, n_of_input_layer * n_of_first_hidden_layer, n_of_first_hidden_layer);
-                    update_params(weight_to_output_layer, grad_to_w4t, bias_of_output_layer, grad_to_b4t, n_of_first_hidden_layer * n_of_output_layer, n_of_output_layer);
-                    for (size_t c = 0; c < n_of_first_channel; c++)
-                    {
-                        for (size_t h = 0; h < filter_hight; h++)
-                        {
-                            for (size_t w = 0; w < filter_width; w++)
-                            {
-                                first_conv_filter[c].filter[filter_width * h + w] -= learning_rate * grad_to_first_conv_filter_t[c].filter[filter_width * h + w];
-                            }
-                            
-                        }
-                        first_conv_bias[c] -= learning_rate * grad_to_b_conv1_t[c];
-                        
-                    }
-                    for (size_t c = 0; c < n_of_second_channel * n_of_first_channel; c++)
-                    {
-                        for (size_t h = 0; h < filter_hight; h++)
-                        {
-                            for (size_t w = 0; w < filter_width; w++)
-                            {
-                                second_conv_filter[c].filter[filter_width * h + w] -= learning_rate * grad_to_second_conv_filter_t[c].filter[filter_width * h + w];
-                            }
-                            
-                        }
-                        
-                    }
-                    for (size_t c = 0; c < n_of_second_channel; c++)
-                    {
-                        second_conv_bias[c] -= learning_rate * grad_to_b_conv2_t[c];
-                    }
-                    
-                    
-                }
-                else {
-                    adam_t++;
-                }
+                momentum_update(weight_to_first_hidden_layer, grad_to_w1t, velocity_grad_buffer_w1t, bias_of_first_hidden_layer, grad_to_b1t, velocity_grad_buffer_b1t, n_of_input_layer * n_of_first_hidden_layer, n_of_first_hidden_layer);
+                momentum_update(weight_to_output_layer, grad_to_w4t, velocity_grad_buffer_w4t, bias_of_output_layer, grad_to_b4t, velocity_grad_buffer_b4t, n_of_first_hidden_layer * n_of_output_layer, n_of_output_layer);
+                momentum_update_conv(first_conv_filter, grad_to_first_conv_filter_t, velocity_grad_buffer_f1t, first_conv_bias, grad_to_b_conv1_t, velocity_grad_buffer_conv_b1t, n_of_first_channel, n_of_first_channel);
+                momentum_update_conv(second_conv_filter, grad_to_second_conv_filter_t, velocity_grad_buffer_f2t, second_conv_bias, grad_to_b_conv2_t, velocity_grad_buffer_conv_b2t, n_of_first_channel * n_of_second_channel, n_of_second_channel);
 
-                batch++;
                 for (size_t c = 0; c < n_of_first_channel; c++)
                 {
                     for (size_t h = 0; h < filter_hight; h++)
@@ -1772,12 +1721,6 @@ int main (void){
     free(grad_to_w1t);
     free(grad_to_w4t);
     free(dropout_mask_for_first_hidden_layer);
-    /*free(m_w1);
-    free(m_b1);
-    free(m_b4);
-    free(v_w1);
-    free(v_w4);
-    free(v_b4);*/
     free(delta_in);
     input_layer = NULL;
     first_hidden_layer = NULL;
@@ -1825,5 +1768,15 @@ int main (void){
     fclose(test_data_images);
     fclose(test_data_labels);
     fclose(fp);
+
+    //free momentum buffer
+    free(velocity_grad_buffer_w1t);
+    free(velocity_grad_buffer_w4t);
+    free(velocity_grad_buffer_b1t);
+    free(velocity_grad_buffer_b4t);
+    free_filter(velocity_grad_buffer_f1t, n_of_first_channel);
+    free_filter(velocity_grad_buffer_f2t, n_of_first_channel * n_of_second_channel);
+    free(velocity_grad_buffer_conv_b1t);
+    free(velocity_grad_buffer_conv_b2t);
     return 0;
 }
