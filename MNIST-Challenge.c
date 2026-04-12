@@ -10,8 +10,8 @@
 #include <immintrin.h>
 
 // ブロックサイズ（L1/L2キャッシュサイズに応じて調整）
-#define BLOCK_H 64
-#define BLOCK_W 64
+#define BLOCK_H 16
+#define BLOCK_W 16
 
 #define PI 3.14159265358979
 #define n_of_input_layer 1600
@@ -20,10 +20,11 @@
 #define learning_rate 0.001
 #define momentum_beta 0.9f
 #define batch_size 160
-#define epoch 15
+#define epoch 1
 #define debug 1
 #define neck_check 0
 #define threaded 0
+#define num_threads 4
 #define regularization_rate 0.0005f
 #define dropout 0
 #define dropout_rate 0.3f
@@ -58,20 +59,36 @@ typedef struct {
     uint8_t *training_image_buffer, *training_label_buffer;
 
     //weights
-    float  *w1, *w2, *w3, *wout, *b1, *b2, *b3, *bout;
+    conv_filter_t *first_conv_filter, *second_conv_filter;
+    float *first_conv_bias, *second_conv_bias;
+    float  *w1, *wout, *b1, *bout;
+
+    //pre-activations
+    conv_layer_t *first_conv_layer_pre_activation, *second_conv_layer_pre_activation;
+    float *z_1, *z_out;
 
     //activations
-    float *a_in, *a_1, *a_2, *a_3, *a_out;
-    float *z_1, *z_2, *z_3, *z_out;
+    conv_layer_t *first_conv_layer_activation, *second_conv_layer_activation;
+    maxpool_layer_t *first_maxpooling_layer, *second_maxpooling_layer;
+    float *a_in, *a_1, *a_out;
 
     //deltas
-    float *delta_1, *delta_2, *delta_3, *delta_4;
+    float *delta_1, *delta_4, *delta_in;
+    maxpool_layer_t *backward_second_maxpool, *backward_first_maxpool;
+    conv_layer_t *backward_second_conv, *backward_first_conv;
 
     //gradient
-    float *grad_w1, *grad_w2, *grad_w3, *grad_w4, *grad_b1, *grad_b2, *grad_b3, *grad_b4;
+    float *grad_w1, *grad_w4, *grad_b1, *grad_b4, *grad_to_b_conv1, *grad_to_b_conv2;
+    conv_filter_t *grad_to_second_conv_filter, *grad_to_first_conv_filter;
 
     //gradient total
-    float *grad_w1t, *grad_w2t, *grad_w3t, *grad_w4t, *grad_b1t, *grad_b2t, *grad_b3t, *grad_b4t;
+    float *grad_w1t, *grad_w4t, *grad_b1t, *grad_b4t, *grad_to_b_conv1_t, *grad_to_b_conv2_t;
+    conv_filter_t *grad_to_first_conv_filter_t, *grad_to_second_conv_filter_t;
+
+    //return buffer
+    float *return_grad_w1t, *return_grad_w4t, *return_grad_b1t, *return_grad_b4t, *return_grad_to_b_conv1_t, *return_grad_to_b_conv2_t;
+    conv_filter_t *return_grad_to_first_conv_filter_t, *return_grad_to_second_conv_filter_t;
+
 } thread_workspace_t;
 
 maxpool_layer_t* alloc_maxpool_layer (int n_channels, int h, int w) {
@@ -133,21 +150,40 @@ thread_workspace_t* alloc_workspace (int n_threads) {
     {
         p[i].training_image_buffer = malloc(784 * batch_size / 4 * sizeof(uint8_t));
         p[i].training_label_buffer = malloc(batch_size / 4 * sizeof(uint8_t));
+        p[i].z_1 = malloc(n_of_first_hidden_layer * sizeof(float));
+        p[i].z_out = malloc(n_of_output_layer * sizeof(float));
+        p[i].first_conv_layer_pre_activation = alloc_conv_layer(n_of_first_channel, 28 - filter_hight + 1, 28 - filter_width + 1);
+        p[i].second_conv_layer_pre_activation = alloc_conv_layer(n_of_second_channel, (28 - filter_hight + 1)/2 - filter_hight + 1, (28 - filter_hight + 1)/2 - filter_width + 1);
         p[i].a_in = malloc(n_of_input_layer * sizeof(float));
         p[i].a_1 = malloc(n_of_first_hidden_layer * sizeof(float));
         p[i].a_out = malloc(n_of_output_layer * sizeof(float));
-        p[i].z_1 = malloc(n_of_first_hidden_layer * sizeof(float));
-        p[i].z_out = malloc(n_of_output_layer * sizeof(float));
+        p[i].first_conv_layer_activation = alloc_conv_layer(n_of_first_channel, 28 - filter_hight + 1, 28 - filter_width + 1);
+        p[i].second_conv_layer_activation = alloc_conv_layer(n_of_second_channel, (28 - filter_hight + 1)/2 - filter_hight + 1, (28 - filter_hight + 1)/2 - filter_width + 1);
+        p[i].first_maxpooling_layer = alloc_maxpool_layer(n_of_first_channel, (28 - filter_hight + 1)/2, (28 - filter_width + 1)/2);
+        p[i].second_maxpooling_layer = alloc_maxpool_layer(n_of_second_channel, ((28 - filter_hight + 1)/2 - filter_hight + 1)/2, ((28 - filter_hight + 1)/2 - filter_width + 1)/2);
+        p[i].delta_in = malloc(n_of_input_layer * sizeof(float));
         p[i].delta_1 = malloc(n_of_first_hidden_layer * sizeof(float));
         p[i].delta_4 = malloc(n_of_output_layer * sizeof(float));
+        p[i].backward_first_conv = alloc_conv_layer(n_of_first_channel, 28 - filter_hight + 1, 28 - filter_hight + 1);
+        p[i].backward_second_conv = alloc_conv_layer(n_of_second_channel, (28 - filter_hight + 1)/2 - filter_hight + 1, (28 - filter_hight + 1)/2 - filter_hight + 1);
+        p[i].backward_first_maxpool = alloc_maxpool_layer(n_of_first_channel, (28 - filter_hight + 1)/2, (28 - filter_hight + 1)/2);
+        p[i].backward_second_maxpool = alloc_maxpool_layer(n_of_second_channel, ((28 - filter_hight + 1)/2 - filter_hight + 1)/2, ((28 - filter_hight + 1)/2 - filter_hight + 1)/2);
         p[i].grad_w1 = malloc(n_of_input_layer * n_of_first_hidden_layer * sizeof(float));
         p[i].grad_w4 = malloc(n_of_first_hidden_layer * n_of_output_layer * sizeof(float));
         p[i].grad_b1 = malloc(n_of_first_hidden_layer * sizeof(float));
         p[i].grad_b4 = malloc(n_of_output_layer * sizeof(float));
+        p[i].grad_to_b_conv1 = calloc(n_of_first_channel, sizeof(float));
+        p[i].grad_to_b_conv2 = calloc(n_of_second_channel, sizeof(float));
+        p[i].grad_to_first_conv_filter = alloc_filter(n_of_first_channel);
+        p[i].grad_to_second_conv_filter = alloc_filter(n_of_first_channel * n_of_second_channel);
         p[i].grad_w1t = malloc(n_of_input_layer * n_of_first_hidden_layer * sizeof(float));
         p[i].grad_w4t = malloc(n_of_first_hidden_layer * n_of_output_layer * sizeof(float));
         p[i].grad_b1t = malloc(n_of_first_hidden_layer * sizeof(float));
         p[i].grad_b4t = malloc(n_of_output_layer * sizeof(float));
+        p[i].grad_to_b_conv1_t = calloc(n_of_first_channel, sizeof(float));
+        p[i].grad_to_b_conv2_t = calloc(n_of_second_channel, sizeof(float));
+        p[i].grad_to_first_conv_filter_t = alloc_filter(n_of_first_channel);
+        p[i].grad_to_second_conv_filter_t = alloc_filter(n_of_first_channel * n_of_second_channel);
     }
     return p;
 }
@@ -158,18 +194,20 @@ void free_workspace (thread_workspace_t *p, int n_threads) {
         //buffer
         free(p[i].training_image_buffer); free(p[i].training_label_buffer);
 
+        //pre-activations
+        free(p[i].z_1); free(p[i].z_out); free_conv_layer(p[i].first_conv_layer_pre_activation, n_of_first_channel); free_conv_layer(p[i].second_conv_layer_pre_activation, n_of_second_channel);
+
         //activations
-        free(p[i].a_in); free(p[i].a_1); free(p[i].a_2); free(p[i].a_3); free(p[i].a_out);
-        free(p[i].z_1); free(p[i].z_2); free(p[i].z_3); free(p[i].z_out);
+        free(p[i].a_in); free(p[i].a_1); free(p[i].a_out); free_conv_layer(p[i].first_conv_layer_activation, n_of_first_channel); free_conv_layer(p[i].second_conv_layer_activation, n_of_second_channel);
         
         //deltas
-        free(p[i].delta_1); free(p[i].delta_2); free(p[i].delta_3); free(p[i].delta_4);
+        free(p[i].delta_in); free(p[i].delta_1); free(p[i].delta_4); free_conv_layer(p[i].backward_first_conv, n_of_first_channel); free_conv_layer(p[i].backward_second_conv, n_of_second_channel); free_maxpool_layer(p[i].backward_first_maxpool, n_of_first_channel); free_maxpool_layer(p[i].backward_second_maxpool, n_of_second_channel);
         
         //gradients
-        free(p[i].grad_w1); free(p[i].grad_w2); free(p[i].grad_w3); free(p[i].grad_w4); free(p[i].grad_b1); free(p[i].grad_b2); free(p[i].grad_b3); free(p[i].grad_b4);
+        free(p[i].grad_w1); free(p[i].grad_w4); free(p[i].grad_b1); free(p[i].grad_b4); free(p[i].grad_to_b_conv1); free(p[i].grad_to_b_conv2); free_filter(p[i].grad_to_first_conv_filter, n_of_first_channel); free_filter(p[i].grad_to_second_conv_filter, n_of_first_channel * n_of_second_channel);
         
         //gradients total
-        free(p[i].grad_w1t); free(p[i].grad_w2t); free(p[i].grad_w3t); free(p[i].grad_w4t); free(p[i].grad_b1t); free(p[i].grad_b2t); free(p[i].grad_b3t); free(p[i].grad_b4t);
+        free(p[i].grad_w1t); free(p[i].grad_w4t); free(p[i].grad_b1t); free(p[i].grad_b4t); free(p[i].grad_to_b_conv1_t); free(p[i].grad_to_b_conv2_t); free_filter(p[i].grad_to_first_conv_filter_t, n_of_first_channel); free_filter(p[i].grad_to_second_conv_filter_t, n_of_first_channel * n_of_second_channel);
     }
     free(p);
 }
@@ -904,7 +942,7 @@ void* training_threaded (void* arg){
             add_bias(info->z_1, info->b1, n_of_first_hidden_layer);
             relu(info->z_1, info->a_1, n_of_first_hidden_layer);
 
-            mmul(info->z_out, info->a_3, info->wout, n_of_output_layer, n_of_first_hidden_layer);
+            //mmul(info->z_out, info->a_3, info->wout, n_of_output_layer, n_of_first_hidden_layer);
             add_bias(info->z_out, info->bout, n_of_output_layer);
             softmax(info->z_out, info->a_out, n_of_output_layer);
 
@@ -922,10 +960,10 @@ void* training_threaded (void* arg){
             //backward pass
             compute_output_delta(info->delta_4, info->a_out, answer_arr, n_of_output_layer);
 
-            weight_grad(info->delta_4, info->a_3, info->grad_w4, n_of_output_layer, n_of_first_hidden_layer);
+            //weight_grad(info->delta_4, info->a_3, info->grad_w4, n_of_output_layer, n_of_first_hidden_layer);
             grad_bias(info->delta_4, info->grad_b4, n_of_output_layer);
 
-            compute_hidden_delta(info->delta_2, info->w2, info->z_1, info->delta_1, n_of_first_hidden_layer, n_of_output_layer);
+            //compute_hidden_delta(info->delta_2, info->w2, info->z_1, info->delta_1, n_of_first_hidden_layer, n_of_output_layer);
 
             weight_grad(info->delta_1, info->a_in, info->grad_w1, n_of_first_hidden_layer, n_of_input_layer);
             grad_bias(info->delta_1, info->grad_b1, n_of_first_hidden_layer);
@@ -1055,6 +1093,9 @@ int main (void){
     //file
     FILE *learning_data_images, *learning_data_labels, *test_data_images, *test_data_labels, *fp;
 
+    //thread workspace alloc
+    thread_workspace_t *ws = alloc_workspace(num_threads);
+
     //weight initialize
     he_initialize_uniform(weight_to_first_hidden_layer, n_of_input_layer, n_of_first_hidden_layer);
     he_initialize_uniform(weight_to_output_layer, n_of_first_hidden_layer, n_of_output_layer);
@@ -1127,9 +1168,7 @@ int main (void){
 
         //learning section
         if (threaded == 1)
-        {
-            /*
-            start = clock();
+        {/*
             //standby section
             for (size_t i = 0; i < 4; i++)
             {
@@ -1150,6 +1189,7 @@ int main (void){
             //training section
             for (int loop = 0; loop < 60000/batch_size; loop++)
             {
+                
                 if (!(loop%100) && debug) {printf("%d datas have been processed.\n", loop);}
 
                 //reset total grad
@@ -1255,9 +1295,7 @@ int main (void){
 
             free(training_image_buffer);
             free(training_label_buffer);
-            end = clock();
-            */
-        }
+        */}
         else {
             start = clock();
             int batch = 0;
@@ -1778,5 +1816,8 @@ int main (void){
     free_filter(velocity_grad_buffer_f2t, n_of_first_channel * n_of_second_channel);
     free(velocity_grad_buffer_conv_b1t);
     free(velocity_grad_buffer_conv_b2t);
+
+    //free workspace
+    free_workspace(ws, num_threads);
     return 0;
 }
