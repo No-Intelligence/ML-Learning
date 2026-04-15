@@ -10,8 +10,8 @@
 #include <immintrin.h>
 
 // ブロックサイズ（L1/L2キャッシュサイズに応じて調整）
-#define BLOCK_H 32
-#define BLOCK_W 32
+#define BLOCK_H 16
+#define BLOCK_W 16
 
 #define PI 3.14159265358979
 #define n_of_input_layer 1600
@@ -20,10 +20,10 @@
 #define learning_rate 0.001
 #define momentum_beta 0.9f
 #define batch_size 480
-#define epoch 5
+#define epoch 10
 #define debug 1
 #define neck_check 0
-#define threaded 1
+#define threaded true
 #define num_threads 12
 #define regularization_rate 0.0005f
 #define dropout 0
@@ -36,10 +36,10 @@
 #define n_of_first_channel 32
 #define n_of_second_channel 64
 
-#define train_images "train-images.idx3-ubyte"
-#define train_labels "train-labels.idx1-ubyte"
-#define test_images "t10k-images.idx3-ubyte"
-#define test_labels "t10k-labels.idx1-ubyte"
+#define train_images "train-images-fashion.idx3-ubyte"
+#define train_labels "train-labels-fashion.idx1-ubyte"
+#define test_images "t10k-images-fashion.idx3-ubyte"
+#define test_labels "t10k-labels-fashion.idx1-ubyte"
 
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
@@ -915,6 +915,42 @@ void backward_conv_layer (maxpool_layer_t *d_input, conv_layer_t *d_z, conv_filt
                             d_input[ic].layer[(oh + kh) * in_w + (ow + kw)] += d_z[oc].layer[oh * out_w + ow]* filter[n_input_channel * oc + ic].filter[filter_width * kh + kw];
 }
 
+void forward_pass(
+    float *input_image, conv_layer_t *first_conv_layer_pre_activation, conv_filter_t *first_conv_filter, float *first_conv_bias, conv_layer_t *first_conv_layer_activation, maxpool_layer_t *first_maxpooling_layer, 
+    conv_filter_t *second_conv_filter, conv_layer_t *second_conv_layer_pre_activation, float *second_conv_bias, conv_layer_t *second_conv_layer_activation, maxpool_layer_t *second_maxpooling_layer, 
+    float *a_0, float *z_1, float *w1, float *b1, float *a_1, float *z_out, float *wout, float *bout, float *a_out
+){
+    convolution_single_to_multi(input_image, first_conv_filter, first_conv_layer_pre_activation, 28, 28, n_of_first_channel);
+    add_bias_conv(first_conv_layer_pre_activation, first_conv_bias, n_of_first_channel, (28 - filter_hight + 1), (28 - filter_width + 1));
+    for (size_t i = 0; i < n_of_first_channel; i++)
+    {
+        relu(first_conv_layer_pre_activation[i].layer, first_conv_layer_activation[i].layer, (28 - filter_hight + 1) * (28 - filter_width + 1));
+    }
+
+    maxpool(first_conv_layer_activation, first_maxpooling_layer, n_of_first_channel, (28 - filter_hight + 1), (28 - filter_width + 1), 2);
+            
+    convolution_multi_to_multi(first_maxpooling_layer, second_conv_filter, second_conv_layer_pre_activation, (28 - filter_hight + 1)/2, (28 - filter_width + 1)/2, n_of_first_channel, n_of_second_channel);
+    add_bias_conv(second_conv_layer_pre_activation, second_conv_bias, n_of_second_channel, ((28 - filter_hight + 1)/2 - filter_hight + 1), ((28 - filter_width + 1)/2 - filter_width + 1));
+    for (size_t i = 0; i < n_of_second_channel; i++)
+    {
+        relu(second_conv_layer_pre_activation[i].layer, second_conv_layer_activation[i].layer, ((28 - filter_hight + 1)/2 - filter_hight + 1) * ((28 - filter_width + 1)/2 - filter_width + 1));
+    }
+
+    maxpool(second_conv_layer_activation, second_maxpooling_layer, n_of_second_channel, ((28 - filter_hight + 1)/2 - filter_hight + 1), ((28 - filter_width + 1)/2 - filter_width + 1), 2);
+
+    flatten(a_0, second_maxpooling_layer, n_of_second_channel, ((28 - filter_hight + 1)/2 - filter_hight + 1)/2, ((28 - filter_width + 1)/2 - filter_width + 1)/2);
+            
+    mmul(z_1, a_0, w1, n_of_first_hidden_layer, n_of_input_layer);
+    add_bias(z_1, b1, n_of_first_hidden_layer);
+
+    relu(z_1, a_1, n_of_first_hidden_layer);
+
+    mmul(z_out, a_1, wout, n_of_output_layer, n_of_first_hidden_layer);
+    add_bias(z_out, bout, n_of_output_layer);
+
+    softmax(z_out, a_out, n_of_output_layer);
+}
+
 void* training_threaded (void* arg){
     //standby section
     thread_workspace_t* datas = (thread_workspace_t*)arg;
@@ -934,36 +970,11 @@ void* training_threaded (void* arg){
             answer = datas->training_label_buffer[loop];
 
             //forward pass
-            convolution_single_to_multi(datas->a_in, datas->first_conv_filter, datas->first_conv_layer_pre_activation, 28, 28, n_of_first_channel);
-            add_bias_conv(datas->first_conv_layer_pre_activation, datas->first_conv_bias, n_of_first_channel, (28 - filter_hight + 1), (28 - filter_width + 1));
-            for (size_t i = 0; i < n_of_first_channel; i++)
-            {
-                relu(datas->first_conv_layer_pre_activation[i].layer, datas->first_conv_layer_activation[i].layer, (28 - filter_hight + 1) * (28 - filter_width + 1));
-            }
-
-            maxpool(datas->first_conv_layer_activation, datas->first_maxpooling_layer, n_of_first_channel, (28 - filter_hight + 1), (28 - filter_width + 1), 2);
-            
-            convolution_multi_to_multi(datas->first_maxpooling_layer, datas->second_conv_filter, datas->second_conv_layer_pre_activation, (28 - filter_hight + 1)/2, (28 - filter_width + 1)/2, n_of_first_channel, n_of_second_channel);
-            add_bias_conv(datas->second_conv_layer_pre_activation, datas->second_conv_bias, n_of_second_channel, ((28 - filter_hight + 1)/2 - filter_hight + 1), ((28 - filter_width + 1)/2 - filter_width + 1));
-            for (size_t i = 0; i < n_of_second_channel; i++)
-            {
-                relu(datas->second_conv_layer_pre_activation[i].layer, datas->second_conv_layer_activation[i].layer, ((28 - filter_hight + 1)/2 - filter_hight + 1) * ((28 - filter_width + 1)/2 - filter_width + 1));
-            }
-
-            maxpool(datas->second_conv_layer_activation, datas->second_maxpooling_layer, n_of_second_channel, ((28 - filter_hight + 1)/2 - filter_hight + 1), ((28 - filter_width + 1)/2 - filter_width + 1), 2);
-
-            flatten(datas->a_0, datas->second_maxpooling_layer, n_of_second_channel, ((28 - filter_hight + 1)/2 - filter_hight + 1)/2, ((28 - filter_width + 1)/2 - filter_width + 1)/2);
-            
-            mmul(datas->z_1, datas->a_0, datas->w1, n_of_first_hidden_layer, n_of_input_layer);
-            add_bias(datas->z_1, datas->b1, n_of_first_hidden_layer);
-
-            relu(datas->z_1, datas->a_1, n_of_first_hidden_layer);
-
-            mmul(datas->z_out, datas->a_1, datas->wout, n_of_output_layer, n_of_first_hidden_layer);
-            add_bias(datas->z_out, datas->bout, n_of_output_layer);
-
-            softmax(datas->z_out, datas->a_out, n_of_output_layer);
-
+            forward_pass(
+                datas->a_in, datas->first_conv_layer_pre_activation, datas->first_conv_filter, datas->first_conv_bias, datas->first_conv_layer_activation, datas->first_maxpooling_layer, 
+                datas->second_conv_filter, datas->second_conv_layer_pre_activation, datas->second_conv_bias, datas->second_conv_layer_activation, datas->second_maxpooling_layer, 
+                datas->a_0, datas->z_1, datas->w1, datas->b1, datas->a_1, datas->z_out, datas->wout, datas->bout, datas->a_out
+            );
 
             //loss function (cross entropy)
             for (int i = 0; i < n_of_output_layer; i++){
@@ -1555,46 +1566,11 @@ int main (void){
             answer = training_label_buffer[order_indices[loop]];
 
             //forward pass
-            convolution_single_to_multi(input_image, first_conv_filter, first_conv_layer_pre_activation, 28, 28, n_of_first_channel);
-            add_bias_conv(first_conv_layer_pre_activation, first_conv_bias, n_of_first_channel, (28 - filter_hight + 1), (28 - filter_width + 1));
-            for (size_t i = 0; i < n_of_first_channel; i++)
-            {
-                relu(first_conv_layer_pre_activation[i].layer, first_conv_layer_activation[i].layer, (28 - filter_hight + 1) * (28 - filter_width + 1));
-            }
-
-            maxpool(first_conv_layer_activation, first_maxpooling_layer, n_of_first_channel, (28 - filter_hight + 1), (28 - filter_width + 1), 2);
-            
-            convolution_multi_to_multi(first_maxpooling_layer, second_conv_filter, second_conv_layer_pre_activation, (28 - filter_hight + 1)/2, (28 - filter_width + 1)/2, n_of_first_channel, n_of_second_channel);
-            add_bias_conv(second_conv_layer_pre_activation, second_conv_bias, n_of_second_channel, ((28 - filter_hight + 1)/2 - filter_hight + 1), ((28 - filter_width + 1)/2 - filter_width + 1));
-            for (size_t i = 0; i < n_of_second_channel; i++)
-            {
-                relu(second_conv_layer_pre_activation[i].layer, second_conv_layer_activation[i].layer, ((28 - filter_hight + 1)/2 - filter_hight + 1) * ((28 - filter_width + 1)/2 - filter_width + 1));
-            }
-
-            maxpool(second_conv_layer_activation, second_maxpooling_layer, n_of_second_channel, ((28 - filter_hight + 1)/2 - filter_hight + 1), ((28 - filter_width + 1)/2 - filter_width + 1), 2);
-
-            flatten(input_layer, second_maxpooling_layer, n_of_second_channel, ((28 - filter_hight + 1)/2 - filter_hight + 1)/2, ((28 - filter_width + 1)/2 - filter_width + 1)/2);
-            
-            if (avx2 == true) {
-                mat_vec_mul(weight_to_first_hidden_layer, input_layer, z1, n_of_first_hidden_layer, n_of_input_layer);
-                vec_add_avx(z1, bias_of_first_hidden_layer, z1, n_of_first_hidden_layer);
-            }
-            else {
-                mmul(z1, input_layer, weight_to_first_hidden_layer, n_of_first_hidden_layer, n_of_input_layer);
-                add_bias(z1, bias_of_first_hidden_layer, n_of_first_hidden_layer);
-            }
-            relu(z1, first_hidden_layer, n_of_first_hidden_layer);
-            if (dropout == 1) {apply_dropout(first_hidden_layer, dropout_mask_for_first_hidden_layer, batch, n_of_first_hidden_layer);}
-
-            if (avx2 == true) {
-                mat_vec_mul(weight_to_output_layer, first_hidden_layer, zout, n_of_output_layer, n_of_first_hidden_layer);
-                vec_add_avx(zout, bias_of_output_layer, zout, n_of_output_layer);
-            }
-            else {
-                mmul(zout, first_hidden_layer, weight_to_output_layer, n_of_output_layer, n_of_first_hidden_layer);
-                add_bias(zout, bias_of_output_layer, n_of_output_layer);
-            }
-            softmax(zout, output_layer, n_of_output_layer);
+            forward_pass(
+                input_image, first_conv_layer_pre_activation, first_conv_filter, first_conv_bias, first_conv_layer_activation, first_maxpooling_layer, 
+                second_conv_filter, second_conv_layer_pre_activation, second_conv_bias, second_conv_layer_activation, second_maxpooling_layer, 
+                input_layer, z1, weight_to_first_hidden_layer, bias_of_first_hidden_layer, first_hidden_layer, zout, weight_to_output_layer, bias_of_output_layer, output_layer
+            );
 
             //loss function (cross entropy)
             for (int i = 0; i < n_of_output_layer; i++){
