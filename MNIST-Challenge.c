@@ -20,7 +20,7 @@
 #define learning_rate 0.001
 #define momentum_beta 0.9f
 #define batch_size 480
-#define epoch 10
+#define epoch 20
 #define debug 1
 #define neck_check 0
 #define threaded true
@@ -150,8 +150,8 @@ thread_workspace_t* alloc_workspace (int n_threads) {
     thread_workspace_t *p = calloc(n_threads, sizeof(thread_workspace_t));
     for (size_t i = 0; i < n_threads; i++)
     {
-        p[i].training_image_buffer = malloc(784 * batch_size / 4 * sizeof(uint8_t));
-        p[i].training_label_buffer = malloc(batch_size / 4 * sizeof(uint8_t));
+        p[i].training_image_buffer = malloc(784 * batch_size / n_threads * sizeof(uint8_t));
+        p[i].training_label_buffer = malloc(batch_size / n_threads * sizeof(uint8_t));
         p[i].z_1 = malloc(n_of_first_hidden_layer * sizeof(float));
         p[i].z_out = malloc(n_of_output_layer * sizeof(float));
         p[i].first_conv_layer_pre_activation = alloc_conv_layer(n_of_first_channel, 28 - filter_hight + 1, 28 - filter_width + 1);
