@@ -87,7 +87,7 @@ void parameter_initialize (neural_network_t *neural_network);
 
 void backward_pass (neural_network_t *neural_network, float *answer);
 
-void updata_param (neural_network_t *neural_network, float *learning_rate);
+void updata_param (neural_network_t *neural_network, float learning_rate);
 
 
 #endif
