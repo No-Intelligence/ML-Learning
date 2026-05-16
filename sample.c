@@ -69,26 +69,26 @@ int main(int argc, char const *argv[])
     int hit = 0;
     int t = 0;
 
-    for (int x = 0; x < 1; x++){
-    for (size_t i = 0; i < 60000; i++)
-    {
-        memcpy(input_one_image, &input_buffer[784 * i], 784 * sizeof(float));
-        for (size_t j = 0; j < 10; j++)
+    for (int x = 0; x < 10; x++){
+        for (size_t i = 0; i < 60000; i++)
         {
-            answer_one_label[j] = 0.0 + (answer_label_buffer[i] == j);
-        }
+            memcpy(input_one_image, &input_buffer[784 * i], 784 * sizeof(float));
+            for (size_t j = 0; j < 10; j++)
+            {
+                answer_one_label[j] = 0.0 + (answer_label_buffer[i] == j);
+            }
 
-        forward_pass(nn, input_one_image, output);
-        backward_pass(nn, answer_one_label);
-        if (i % 32 == 31)
-        {
-            t++;
-            update_param_adam(nn, learning_rate, regularization_rate, 0.9f, 0.999f, 1e-7, t, 32);
+            forward_pass(nn, input_one_image, output);
+            backward_pass(nn, answer_one_label);
+            if (i % 32 == 31)
+            {
+                t++;
+                update_param_adam(nn, learning_rate, regularization_rate, 0.9f, 0.999f, 1e-7, t, 32);
+            }
+            if (i % 3000 == 0) {
+                printf("%.1f%%\n", (i / 60000.0f) * 100.0f);
+            }
         }
-        if (i % 3000 == 0) {
-            printf("%.1f%%\n", (i / 60000.0f) * 100.0f);
-        }
-    }
     }
 
     load_MNIST_format_image("t10k-images-fashion.idx3-ubyte", 10000, input_buffer);

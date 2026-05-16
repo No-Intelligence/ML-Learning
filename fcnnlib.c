@@ -91,6 +91,11 @@ void free_param_grad (param_grad_t *param_grad, int n_layers, int *layer_size) {
 }
 
 neural_network_t* alloc_neural_network (int n_layers, int *layer_size, activation_t *activations) {
+    if (n_layers < 2)
+    {
+        printf("the number of layers are irregular\n");
+        return NULL;
+    }
     neural_network_t *p = calloc(1, sizeof(neural_network_t));
     p->layers = alloc_layer(n_layers, layer_size);
     p->parameters = alloc_parameter(n_layers, layer_size);
