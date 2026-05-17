@@ -1,61 +1,6 @@
 #ifndef FULLY_CONNECTED_NEURAL_NETWORK_LIBRARY_H
 #define FULLY_CONNECTED_NEURAL_NETWORK_LIBRARY_H
 
-typedef enum {
-    LAYER_FC,
-    LAYER_CONV,
-    LAYER_POOL,
-    LAYER_RELU,
-    LAYER_LEAKY_RELU,
-    LAYER_SOFTMAX,
-    LAYER_FLATTEN,
-} layer_type_t;
-
-typedef struct {
-    float *weight;
-    float *bias;
-    float *m_weight;
-    float *v_weight;
-    float *m_bias;
-    float *v_bias;
-} fc_layer_t;
-
-typedef struct {
-    int in_hight;
-    int in_width;
-    int in_channel;
-    int filter_hight;
-    int filter_width;
-    int filter_channel;
-    int filter_stride;
-    int n_padding;
-    float *filter;
-    float *m_filter;
-    float *v_filter;
-    float *bias;
-    float *m_bias;
-    float *v_bias;
-} conv_layer_t;
-
-typedef struct {
-    int in_hight;
-    int in_width;
-    int in_channel;
-    int kernel_hight;
-    int kernel_width;
-    int *mask;
-} pool_layer_t;
-
-
-
-
-
-
-
-
-
-
-
 typedef struct {
     float *pre_activation;
     float *activation;
