@@ -16,7 +16,7 @@ void add_fc_layer (neural_network_t *nn, int in_size, int out_size) {
     nn->layers = realloc(nn->layers, nn->n_layers * sizeof(layer_t));
     nn->layers[nn->n_layers - 1].type = LAYER_FC;
     nn->layers[nn->n_layers - 1].output_size = out_size;
-    nn->layers[nn->n_layers - 1].delta = calloc(out_size, sizeof(float));
+    nn->layers[nn->n_layers - 1].delta = calloc(in_size, sizeof(float));
     nn->layers[nn->n_layers - 1].output = calloc(out_size, sizeof(float));
 
     nn->layers[nn->n_layers - 1].data.fc.in_size = in_size;
@@ -368,17 +368,107 @@ void compute_output_softmax_delta (float *output_delta, float *output_layer_acti
     
 }
 
-void compute_backward_fc (float *output_delta, float *current_delta, float *weight, float *backward_pre_activation, int n_of_activation, int n_of_z_delta) {
-    memset(output_delta, 0, n_of_activation * sizeof(float));
-    for (size_t i = 0; i < n_of_activation; i++)
+void compute_backward_fc (float *output_delta, float *current_delta, float *weight, int n_output_delta, int n_current_delta) {
+    memset(output_delta, 0, n_output_delta * sizeof(float));
+    for (size_t i = 0; i < n_output_delta; i++)
     {
-        for (size_t j = 0; j < n_of_z_delta; j++)
+        for (size_t j = 0; j < n_current_delta; j++)
         {
-            output_delta[i] += current_delta[j] * current_weight[j * n_of_activation+ i];
+            output_delta[i] += current_delta[j] * weight[j * n_output_delta+ i];
         }
         
     }
 }
+
+void compute_weight_grad (float *z_delta, float *previous_activation_arr, float *output_arr, int n_of_output, int n_of_input) {
+    for (int i = 0; i < n_of_output; i++)
+    {
+        for (int j = 0; j < n_of_input; j++)
+        {
+            output_arr[i * n_of_input + j] = z_delta[i] * previous_activation_arr[j];
+        }
+        
+    }
+}
+
+void compute_bias_grad (float *output_bias_grad, float *delta, int n_of_arr) {
+    memcpy(output_bias_grad, delta, n_of_arr * sizeof(float));
+}
+
+void compute_backward_maxpool (float *computed_delta, float *current_delta, uint8_t *mask, int n_channels, int in_h, int in_w) {
+    memset(computed_delta, 0, n_channels * in_h * in_w * sizeof(float));
+
+    int index = 0;
+    for (size_t c = 0; c < n_channels; c++)
+    {
+        for (size_t h = 0; h < in_h; h++)
+        {
+            for (size_t w = 0; w < in_w; w++)
+            {
+                if (mask[in_h * in_w * c + in_w * h + w] == 1)
+                {
+                    computed_delta[in_h * in_w * c + in_w * h + w] = current_delta[index];
+                    index++;
+                }
+                
+            }
+            
+        }
+        
+    }
+    
+}
+
+void compute_backward_conv (float *computed_delta, float *grad_filter, float *grad_bias, float *activation, float *current_delta, float *filter, float *input, int n_input_height, int n_input_width, int filter_height, int filter_width, int n_filters, int in_channel, int in_h, int in_w, int stride) {
+    //standby
+    int n_output_height = (n_input_height - filter_height) / stride + 1;
+    int n_output_width = (n_input_width - filter_width) / stride  + 1;
+
+    //zero fill
+    memset(computed_delta, 0, in_channel * n_input_height * n_input_width * sizeof(float));
+    memset(grad_filter, 0, n_filters * in_channel * filter_height * filter_width * sizeof(float));
+
+    for (size_t n = 0; n < n_filters; n++)
+    {
+        for (size_t oh = 0; oh < n_output_height; oh++)
+        {
+            for (size_t ow = 0; ow < n_output_width; ow++)
+            {
+                for (size_t c = 0; c < in_channel; c++)
+                {
+                    for (size_t fh = 0; fh < filter_height; fh++)
+                    {
+                        for (size_t fw = 0; fw < filter_width; fw++)
+                        {
+                            grad_filter[n * in_channel * filter_height * filter_width + c * filter_height * filter_width + fh * filter_width + fw] += current_delta[n_output_height * n_output_width * n + n_output_width * oh + ow] * input[c * n_input_height * n_input_width + (oh*stride+fh) * n_input_width+ ow*stride+fw];
+                            computed_delta[c * n_input_height * n_input_width + (oh*stride+fh) * n_input_width+ ow*stride+fw] += current_delta[n * n_output_height * n_output_width + oh * n_output_width + ow] * filter[n * in_channel * filter_width * filter_height + c * filter_width * filter_height  + fh * filter_width + fw];
+                        }
+                        
+                    }
+                    
+                }
+                
+            }
+            
+        }
+        
+    }
+    for (size_t n = 0; n < n_filters; n++)
+    {
+        for (size_t oh = 0; oh < n_output_height; oh++)
+        {
+            for (size_t ow = 0; ow < n_output_width; ow++)
+            {
+                grad_bias[n] += current_delta[n_output_height * n_output_width * n + n_output_width * oh + ow];
+            }
+            
+        }
+        
+    }
+    
+}
+
+
 
 void backward_pass (neural_network_t *nn, float *answer) {
     float *current_delta;
@@ -395,12 +485,20 @@ void backward_pass (neural_network_t *nn, float *answer) {
         switch (nn->layers[i].type)
         {
         case LAYER_FC:
+            compute_weight_grad(current_delta, nn->layers[i - 1].output, nn->layers[i].data.fc.grad_weight, nn->layers[i].output_size, nn->layers[i - 1].output_size);
+            compute_bias_grad(nn->layers[i].data.fc.grad_bias, current_delta, nn->layers[i].output_size);
+            if (i > 0)
+            {
+                compute_backward_fc(nn->layers[i].delta, current_delta, nn->layers[i].data.fc.weight, nn->layers[i].data.fc.in_size, nn->layers[i].data.fc.out_size);
+            }
             break;
 
         case LAYER_CONV:
+            compute_backward_conv(nn->layers[i].delta, nn->layers[i].data.conv.grad_filter, nn->layers[i].data.conv.grad_bias, nn->layers[i].output, current_delta, nn->layers[i].data.conv.filter, nn->layers[i - 1].output, nn->layers[i].data.conv.in_height, nn->layers[i].data.conv.in_width, nn->layers[i].data.conv.filter_height, nn->layers[i].data.conv.filter_width, nn->layers[i].data.conv.n_filters, nn->layers[i].data.conv.in_channel, nn->layers[i].data.conv.in_height, nn->layers[i].data.conv.in_width, nn->layers[i].data.conv.filter_stride);
             break;
 
         case LAYER_POOL:
+            compute_backward_maxpool(nn->layers[i].delta, current_delta, nn->layers[i].data.pool.mask, nn->layers[i].data.pool.in_channel, nn->layers[i].data.pool.in_height, nn->layers[i].data.pool.in_width);
             break;
 
         case LAYER_RELU:
@@ -425,6 +523,71 @@ void backward_pass (neural_network_t *nn, float *answer) {
             break;
         }
         current_delta = nn->layers[i].delta;
+    }
+    
+}
+
+void parameter_initialize (neural_network_t *nn) {
+    for (int i = 0; i < nn->n_layers; i++) {
+        switch (nn->layers[i].type) {
+        case LAYER_FC:{
+            float std = sqrtf(2.0f / (float)nn->layers[i].data.fc.in_size);
+            for (int j = 0; j < nn->layers[i].data.fc.in_size * nn->layers[i].data.fc.out_size; j++) {
+                nn->layers[i].data.fc.weight[j] = ((float)rand() / RAND_MAX) * 2.0f - 1.0f;
+                nn->layers[i].data.fc.weight[j] *= std * sqrtf(3.0f);
+            }
+            break;
+        }
+        case LAYER_CONV:{
+            float limit = sqrtf(2.0f / (nn->layers[i].data.conv.in_channel * nn->layers[i].data.conv.filter_height * nn->layers[i].data.conv.filter_width));
+            for (int j = 0; j < nn->layers[i].data.conv.in_channel * nn->layers[i].data.conv.n_filters * nn->layers[i].data.conv.filter_height * nn->layers[i].data.conv.filter_width; j++) {
+                nn->layers[i].data.conv.filter[j] = ((float)rand() / RAND_MAX) * 2.0f * limit - limit;
+            }
+            break;
+        }
+        default:
+            break;
+        }
+    }
+}
+
+void update_param_adam (neural_network_t *nn, float lr, float weight_decay, float beta1, float beta2, float eps, int t, int batch_size) {
+    for (size_t layer = 0; layer < nn->n_layers - 1; layer++)
+    {
+        switch (nn->layers[layer].type)
+        {
+        case LAYER_FC:{
+            for (size_t j = 0; j < nn->layers[layer].data.fc.in_size * nn->layers[layer].data.fc.out_size; j++)
+            {
+                nn->layers[layer].data.fc.grad_weight[j] /= batch_size;
+            }
+            for (size_t j = 0; j < nn->layers[layer].data.fc.out_size; j++)
+            {
+                nn->layers[layer].data.fc.grad_bias[j] /= batch_size;
+            }
+    
+            float bc = lr * sqrtf(1.0f - powf(beta2, t)) / (1.0f - powf(beta1, t));
+
+            for (size_t j = 0; j < nn->layers[layer].data.fc.in_size * nn->layers[layer].data.fc.out_size; j++)
+            {
+                float g = nn->layers[layer].data.fc.grad_weight[j];
+                nn->layers[layer].data.fc.m_weight[j] = beta1 * nn->layers[layer].data.fc.m_weight[j] + (1 - beta1) * g;
+                nn->layers[layer].data.fc.v_weight[j] = beta2 * nn->layers[layer].data.fc.v_weight[j] + (1 - beta2) * g * g;
+                nn->layers[layer].data.fc.weight[j] -= bc * nn->layers[layer].data.fc.m_weight[j] / (sqrtf(nn->layers[layer].data.fc.v_weight[j]) + eps) + lr * weight_decay * nn->layers[layer].data.fc.weight[j];
+            }
+            for (size_t j = 0; j < nn->layers[layer].data.fc.out_size; j++)
+            {
+                float g = nn->layers[layer].data.fc.grad_bias[j];
+                nn->layers[layer].data.fc.m_bias[j] = beta1 * nn->layers[layer].data.fc.m_bias[j] + (1 - beta1) * g;
+                nn->layers[layer].data.fc.v_bias[j] = beta2 * nn->layers[layer].data.fc.v_bias[j] + (1 - beta2) * g * g;
+                nn->layers[layer].data.fc.bias[j] -= bc * nn->layers[layer].data.fc.m_bias[j] / (sqrtf(nn->layers[layer].data.fc.v_bias[j]) + eps);
+            }
+            break;
+        }
+        
+        default:
+            break;
+        }
     }
     
 }

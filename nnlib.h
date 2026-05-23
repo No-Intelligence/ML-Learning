@@ -109,8 +109,19 @@ void forward_pass (neural_network_t *nn, float *input);
 
 void compute_output_softmax_delta (float *output_delta, float *output_layer_activation, float *answer_arr, int n_of_arr);
 
-void compute_backward_fc (float *output_delta, float *current_delta, float *weight, float *backward_pre_activation, int n_of_activation, int n_of_z_delta);
+void compute_backward_fc (float *output_delta, float *current_delta, float *weight, int n_output_delta, int n_current_delta);
+
+void compute_weight_grad (float *z_delta, float *previous_activation_arr, float *output_arr, int n_of_output, int n_of_input);
+
+void compute_bias_grad (float *output_bias_grad, float *delta, int n_of_arr);
+
+void compute_backward_maxpool (float *computed_delta, float *current_delta, uint8_t *mask, int n_channels, int in_h, int in_w);
+
+void compute_backward_conv (float *computed_delta, float *grad_filter, float *grad_bias, float *activation, float *current_delta, float *filter, float *input, int n_input_height, int n_input_width, int filter_height, int filter_width, int n_filters, int in_channel, int in_h, int in_w, int stride);
 
 void backward_pass (neural_network_t *nn, float *answer);
+
+void parameter_initialize (neural_network_t *nn);
+void update_param_adam (neural_network_t *nn, float lr, float weight_decay, float beta1, float beta2, float eps, int t, int batch_size);
 
 #endif

@@ -5,11 +5,8 @@
 #include <math.h>
 #include <time.h>
 #include <stdint.h>
-#include "fcnnlib.h"
+#include "nnlib.h"
 
-int n_layers = 8;
-int layer_size[] = {784, 512, 256, 128, 64, 32, 16, 10};
-activation_t activations[] = {ACTIVATION_LEAKY_RELU, ACTIVATION_LEAKY_RELU, ACTIVATION_LEAKY_RELU, ACTIVATION_LEAKY_RELU, ACTIVATION_LEAKY_RELU, ACTIVATION_LEAKY_RELU, ACTIVATION_SOFTMAX};
 float learning_rate = 0.001f;
 float regularization_rate = 0.0005f;
 
@@ -53,13 +50,20 @@ int find_max_index (float *array, int length) {
 int main(int argc, char const *argv[])
 {
     srand(time(NULL));
-    neural_network_t *nn = alloc_neural_network(n_layers, layer_size, activations);
+    neural_network_t *nn = alloc_neural_network();
+
+    add_fc_layer(nn, 784, 256);
+    add_activation_layer(nn, LAYER_RELU);
+    add_fc_layer(nn, 256, 128);
+    add_activation_layer(nn, LAYER_RELU);
+    add_fc_layer(nn, 128, 10);
+    add_activation_layer(nn, LAYER_SOFTMAX);
     parameter_initialize(nn);
 
     float *input_buffer = calloc(60000 * 784, sizeof(float));
     uint8_t *answer_label_buffer = calloc(60000, sizeof(uint8_t));
-    load_MNIST_format_image("train-images-fashion.idx3-ubyte", 60000, input_buffer);
-    load_MNIST_format_label("train-labels-fashion.idx1-ubyte", 60000, answer_label_buffer);
+    load_MNIST_format_image("train-images.idx3-ubyte", 60000, input_buffer);
+    load_MNIST_format_label("train-labels.idx1-ubyte", 60000, answer_label_buffer);
 
     float *input_one_image = calloc(784, sizeof(float));
     float answer_one_label[10];
@@ -69,7 +73,7 @@ int main(int argc, char const *argv[])
     int hit = 0;
     int t = 0;
 
-    for (int x = 0; x < 10; x++){
+    for (int x = 0; x < 1; x++){
         for (size_t i = 0; i < 60000; i++)
         {
             memcpy(input_one_image, &input_buffer[784 * i], 784 * sizeof(float));
@@ -78,13 +82,10 @@ int main(int argc, char const *argv[])
                 answer_one_label[j] = 0.0 + (answer_label_buffer[i] == j);
             }
 
-            forward_pass(nn, input_one_image, output);
+            forward_pass(nn, input_one_image);
             backward_pass(nn, answer_one_label);
-            if (i % 32 == 31)
-            {
-                t++;
-                update_param_adam(nn, learning_rate, regularization_rate, 0.9f, 0.999f, 1e-7, t, 32);
-            }
+            t++;
+            update_param_adam(nn, learning_rate, regularization_rate, 0.9f, 0.999f, 1e-7, t, 1);
             if (i % 3000 == 0) {
                 printf("%.1f%%\n", (i / 60000.0f) * 100.0f);
             }
@@ -102,8 +103,8 @@ int main(int argc, char const *argv[])
         {
             answer_one_label[j] = 0.0 + (answer_label_buffer[i] == j);
         }
-        forward_pass(nn, input_one_image, output);
-        if (answer_label_buffer[i] == find_max_index(output, 10))
+        forward_pass(nn, input_one_image);
+        if (answer_label_buffer[i] == find_max_index(nn->layers[nn->n_layers - 1].output, 10))
         {
             hit++;
         }
