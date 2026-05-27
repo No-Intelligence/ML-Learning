@@ -41,7 +41,7 @@ void add_conv_layer (neural_network_t *nn, int in_height, int in_width, int in_c
     nn->layers = realloc(nn->layers, nn->n_layers * sizeof(layer_t));
     nn->layers[nn->n_layers - 1].type = LAYER_CONV;
     nn->layers[nn->n_layers - 1].output_size = n_filters * out_height * out_width;
-    nn->layers[nn->n_layers - 1].delta = calloc(n_filters * out_height * out_width, sizeof(float));
+    nn->layers[nn->n_layers - 1].delta = calloc(n_filters * in_height * in_width, sizeof(float));
     nn->layers[nn->n_layers - 1].output = calloc(n_filters * out_height * out_width, sizeof(float));
 
     nn->layers[nn->n_layers - 1].data.conv.in_height = in_height;
@@ -72,7 +72,7 @@ void add_pool_layer (neural_network_t *nn, int in_height, int in_width, int in_c
     nn->layers = realloc(nn->layers, nn->n_layers * sizeof(layer_t));
     nn->layers[nn->n_layers - 1].type = LAYER_POOL;
     nn->layers[nn->n_layers - 1].output_size = in_channel * out_height * out_width;
-    nn->layers[nn->n_layers - 1].delta = calloc(in_channel * out_height * out_width, sizeof(float));
+    nn->layers[nn->n_layers - 1].delta = calloc(in_channel * in_height * in_width, sizeof(float));
     nn->layers[nn->n_layers - 1].output = calloc(in_channel * out_height * out_width, sizeof(float));
 
     nn->layers[nn->n_layers - 1].data.pool.in_height = in_height;
@@ -468,8 +468,6 @@ void compute_backward_conv (float *computed_delta, float *grad_filter, float *gr
     
 }
 
-
-
 void backward_pass (neural_network_t *nn, float *input, float *answer) {
     float *current_delta;
     switch (nn->layers[nn->n_layers - 1].type)
@@ -501,7 +499,14 @@ void backward_pass (neural_network_t *nn, float *input, float *answer) {
             break;
 
         case LAYER_CONV:
-            compute_backward_conv(nn->layers[i].delta, nn->layers[i].data.conv.grad_filter, nn->layers[i].data.conv.grad_bias, nn->layers[i].output, current_delta, nn->layers[i].data.conv.filter, nn->layers[i - 1].output, nn->layers[i].data.conv.in_height, nn->layers[i].data.conv.in_width, nn->layers[i].data.conv.filter_height, nn->layers[i].data.conv.filter_width, nn->layers[i].data.conv.n_filters, nn->layers[i].data.conv.in_channel, nn->layers[i].data.conv.in_height, nn->layers[i].data.conv.in_width, nn->layers[i].data.conv.filter_stride);
+            if (i == 0)
+            {
+                compute_backward_conv(nn->layers[i].delta, nn->layers[i].data.conv.grad_filter, nn->layers[i].data.conv.grad_bias, nn->layers[i].output, current_delta, nn->layers[i].data.conv.filter, input, nn->layers[i].data.conv.in_height, nn->layers[i].data.conv.in_width, nn->layers[i].data.conv.filter_height, nn->layers[i].data.conv.filter_width, nn->layers[i].data.conv.n_filters, nn->layers[i].data.conv.in_channel, nn->layers[i].data.conv.in_height, nn->layers[i].data.conv.in_width, nn->layers[i].data.conv.filter_stride);
+            }
+            else
+            {
+                compute_backward_conv(nn->layers[i].delta, nn->layers[i].data.conv.grad_filter, nn->layers[i].data.conv.grad_bias, nn->layers[i].output, current_delta, nn->layers[i].data.conv.filter, nn->layers[i - 1].output, nn->layers[i].data.conv.in_height, nn->layers[i].data.conv.in_width, nn->layers[i].data.conv.filter_height, nn->layers[i].data.conv.filter_width, nn->layers[i].data.conv.n_filters, nn->layers[i].data.conv.in_channel, nn->layers[i].data.conv.in_height, nn->layers[i].data.conv.in_width, nn->layers[i].data.conv.filter_stride);
+            }            
             break;
 
         case LAYER_POOL:
@@ -591,6 +596,36 @@ void update_param_adam (neural_network_t *nn, float lr, float weight_decay, floa
             }
             break;
         }
+
+        case LAYER_CONV:{
+            for (size_t i = 0; i < nn->layers[layer].data.conv.n_filters * nn->layers[layer].data.conv.in_channel * nn->layers[layer].data.conv.filter_height * nn->layers[layer].data.conv.filter_width; i++)
+            {
+                nn->layers[layer].data.conv.grad_filter[i] /= batch_size;
+            }
+            for (size_t i = 0; i < nn->layers[layer].data.conv.n_filters; i++)
+            {
+                nn->layers[layer].data.conv.grad_bias[i] /= batch_size;
+            }
+
+            float bc = lr * sqrtf(1.0f - powf(beta2, t)) / (1.0f - powf(beta1, t));
+
+            for (size_t i = 0; i < nn->layers[layer].data.conv.n_filters * nn->layers[layer].data.conv.in_channel * nn->layers[layer].data.conv.filter_height * nn->layers[layer].data.conv.filter_width; i++)
+            {
+                float g = nn->layers[layer].data.conv.grad_filter[i];
+                nn->layers[layer].data.conv.m_filter[i] = beta1 * nn->layers[layer].data.conv.m_filter[i] + (1 - beta1) * g;
+                nn->layers[layer].data.conv.v_filter[i] = beta2 * nn->layers[layer].data.conv.v_filter[i] + (1 - beta2) * g * g;
+                nn->layers[layer].data.conv.filter[i] -= bc * nn->layers[layer].data.conv.m_filter[i] / (sqrtf(nn->layers[layer].data.conv.v_filter[i]) + eps) + lr * weight_decay * nn->layers[layer].data.conv.filter[i];
+            }
+            for (size_t i = 0; i < nn->layers[layer].data.conv.n_filters; i++)
+            {
+                float g = nn->layers[layer].data.conv.grad_bias[i];
+                nn->layers[layer].data.conv.m_bias[i] = beta1 * nn->layers[layer].data.conv.m_bias[i] + (1 - beta1) * g;
+                nn->layers[layer].data.conv.v_bias[i] = beta2 * nn->layers[layer].data.conv.v_bias[i] + (1 - beta2) * g * g;
+                nn->layers[layer].data.conv.bias[i] -= bc * nn->layers[layer].data.conv.m_bias[i] / (sqrtf(nn->layers[layer].data.conv.v_bias[i]) + eps);
+            }
+            break;
+        }
+        
         
         default:
             break;

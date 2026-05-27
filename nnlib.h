@@ -122,6 +122,7 @@ void compute_backward_conv (float *computed_delta, float *grad_filter, float *gr
 void backward_pass (neural_network_t *nn, float *input, float *answer);
 
 void parameter_initialize (neural_network_t *nn);
+
 void update_param_adam (neural_network_t *nn, float lr, float weight_decay, float beta1, float beta2, float eps, int t, int batch_size);
 
 #endif
