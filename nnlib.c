@@ -6,6 +6,8 @@
 #include <immintrin.h>
 #include <omp.h>
 
+#define PI 3.14159265f
+
 static void im2col (const float *restrict input, float *restrict col,
                    int in_h, int in_w, int in_c,
                    int fh, int fw, int stride) {
@@ -208,6 +210,11 @@ void free_neural_network (neural_network_t *nn) {
             free(nn->layers[i].delta);
             break;
 
+        case LAYER_GELU:
+            free(nn->layers[i].output);
+            free(nn->layers[i].delta);
+            break;
+
         case LAYER_SOFTMAX:
             free(nn->layers[i].output);
             free(nn->layers[i].delta);
@@ -289,6 +296,14 @@ void leaky_relu (const float *restrict input_arr, float *restrict output_arr, in
     for (; i < n_of_arr; i++) {
         output_arr[i] = input_arr[i] * (input_arr[i] > 0 ? 1.0f : 0.01f);
     }
+}
+
+void gelu (const float *restrict input_arr, float *restrict output_arr, int n_of_arr) {
+    for (size_t i = 0; i < n_of_arr; i++)
+    {
+        output_arr[i] = 0.5 * input_arr[i] * (1 + tanhf(sqrtf(2 / PI) * (input_arr[i] + 0.044715 * input_arr[i] * input_arr[i] * input_arr[i])));
+    }
+    
 }
 
 float extract_max (const float *restrict input_array, int n_of_input_arr) {
@@ -448,6 +463,10 @@ void forward_pass (neural_network_t *nn, const float *restrict input) {
             leaky_relu(current_input, nn->layers[i].output, nn->layers[i].output_size);
             break;
 
+        case LAYER_GELU:
+            gelu(current_input, nn->layers[i].output, nn->layers[i].output_size);
+            break;
+        
         case LAYER_SOFTMAX:
             softmax(current_input, nn->layers[i].output, nn->layers[i].output_size);
             break;
@@ -721,6 +740,13 @@ void backward_pass (neural_network_t *nn, const float *restrict input, const flo
             }
             break;
         }
+
+        case LAYER_GELU:
+            for (size_t j = 0; j < nn->layers[i].output_size; j++)
+            {
+                nn->layers[i].delta[j] = current_delta[j] * (0.5 * (1 + tanhf(sqrtf(2 / PI) * (nn->layers[i - 1].output[j] + 0.044715 * nn->layers[i - 1].output[j] * nn->layers[i - 1].output[j] * nn->layers[i - 1].output[j]))) + 0.5 * nn->layers[i - 1].output[j] / coshf(sqrtf(2 / PI) * (nn->layers[i - 1].output[j] + 0.044715 * nn->layers[i - 1].output[j] * nn->layers[i - 1].output[j] * nn->layers[i - 1].output[j])) / coshf(sqrtf(2 / PI) * (nn->layers[i - 1].output[j] + 0.044715 * nn->layers[i - 1].output[j] * nn->layers[i - 1].output[j] * nn->layers[i - 1].output[j])) * sqrtf(2 / PI) * (1 + 0.134145 * nn->layers[i - 1].output[j] * nn->layers[i - 1].output[j]));
+            }
+            break;
 
         case LAYER_SOFTMAX:
             break;

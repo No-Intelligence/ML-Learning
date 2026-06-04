@@ -52,14 +52,14 @@ int main(int argc, char const *argv[])
     srand(time(NULL));
     neural_network_t *nn = alloc_neural_network();
     add_conv_layer(nn, 28, 28, 1, 3, 3, 32, 1, 0);
-    add_activation_layer(nn, LAYER_LEAKY_RELU);
+    add_activation_layer(nn, LAYER_GELU);
     add_pool_layer(nn, 26, 26, 32, 2, 2);
     add_conv_layer(nn, 13, 13, 32, 3, 3, 64, 1, 0);
-    add_activation_layer(nn, LAYER_LEAKY_RELU);
+    add_activation_layer(nn, LAYER_GELU);
     add_pool_layer(nn, 11, 11, 64, 2, 2);
     add_flatten_layer(nn);
     add_fc_layer(nn, 5*5*64, 128);
-    add_activation_layer(nn, LAYER_LEAKY_RELU);
+    add_activation_layer(nn, LAYER_GELU);
     add_fc_layer(nn, 128, 10);
     add_activation_layer(nn, LAYER_SOFTMAX);
     
@@ -80,7 +80,7 @@ int main(int argc, char const *argv[])
     int t = 0;
 
     printf("training start\n");
-    for (int x = 0; x < 5; x++){
+    for (int x = 0; x < 1; x++){
         for (size_t i = 0; i < 60000; i++)
         {
             memcpy(input_one_image, &input_buffer[784 * i], 784 * sizeof(float));
@@ -105,7 +105,6 @@ int main(int argc, char const *argv[])
 
     load_MNIST_format_image("t10k-images-fashion-idx3-ubyte", 10000, input_buffer);
     load_MNIST_format_label("t10k-labels-fashion-idx1-ubyte", 10000, answer_label_buffer);
-
     for (size_t i = 0; i < 10000; i++)
     {
         memcpy(input_one_image, &input_buffer[784 * i], 784 * sizeof(float));

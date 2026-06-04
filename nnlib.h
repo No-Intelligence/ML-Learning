@@ -9,6 +9,7 @@ typedef enum {
     LAYER_POOL,
     LAYER_RELU,
     LAYER_LEAKY_RELU,
+    LAYER_GELU,
     LAYER_SOFTMAX,
     LAYER_FLATTEN,
 } layer_type_t;
@@ -96,6 +97,8 @@ void add_array (float *restrict operated_arr, const float *restrict input_arr, i
 void relu (const float *restrict input_arr, float *restrict output_arr, int n_of_arr);
 
 void leaky_relu (const float *restrict input_arr, float *restrict output_arr, int n_of_arr);
+
+void gelu (const float *restrict input_arr, float *restrict output_arr, int n_of_arr);
 
 float extract_max (const float *restrict input_array, int n_of_input_arr);
 
