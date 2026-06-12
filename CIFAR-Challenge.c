@@ -72,7 +72,7 @@ int main(int argc, char const *argv[])
     int t = 0;
 
     printf("training start\n");
-    for (int epoch = 0; epoch < 10; epoch++){
+    for (int epoch = 0; epoch < 1; epoch++){
         for (int x = 0; x < 5; x++){
             if (x==0)
             {

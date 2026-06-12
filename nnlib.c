@@ -175,16 +175,17 @@ void free_neural_network (neural_network_t *nn) {
     free(nn);
 }
 
-void matrix_arr_mul (float *output_arr, float *input_arr, float *matrix, int n_of_output_arr, int n_of_input_arr) {
+void matrix_arr_mul (float * restrict output_arr, const float * restrict input_arr, const float * restrict matrix, int n_of_output_arr, int n_of_input_arr) {
     memset(output_arr, 0, n_of_output_arr * sizeof(float));
     
     for (int i = 0; i < n_of_output_arr; i++)
     {
+        float sum = 0.0f;
         for (int j = 0; j < n_of_input_arr; j++)
         {
-            output_arr[i] += matrix[n_of_input_arr * i + j] * input_arr[j];
+            sum += matrix[n_of_input_arr * i + j] * input_arr[j];
         }
-        
+        output_arr[i] = sum;
     }
 
 }
@@ -252,42 +253,43 @@ void softmax (float *input_arr, float *output_arr, int n_of_arr) {
 
 }
 
-void forward_convolution (float *input, float *filter, float *output, int n_input_height, int n_input_width, int n_input_channel, int filter_height, int filter_width, int n_filters, int stride, float *bias) {
-    //standby
+void forward_convolution (const float * restrict input, const float * restrict filter, float * restrict output, int n_input_height, int n_input_width, int n_input_channel, int filter_height, int filter_width, int n_filters, int stride, const float * restrict bias) {
     int n_output_height = (n_input_height - filter_height) / stride + 1;
-    int n_output_width = (n_input_width - filter_width) / stride  + 1;
+    int n_output_width = (n_input_width - filter_width) / stride + 1;
 
-    //zero fill
     memset(output, 0, n_filters * n_output_height * n_output_width * sizeof(float));
 
-    for (size_t n = 0; n < n_filters; n++)
+    for (int n = 0; n < n_filters; n++)
     {
-        for (size_t oh = 0; oh < n_output_height; oh++)
+        for (int c = 0; c < n_input_channel; c++)
         {
-            for (size_t ow = 0; ow < n_output_width; ow++)
+            for (int fh = 0; fh < filter_height; fh++)
             {
-                for (size_t fh = 0; fh < filter_height; fh++)
+                for (int fw = 0; fw < filter_width; fw++)
                 {
-                    for (size_t fw = 0; fw < filter_width; fw++)
+                    float w = filter[n * n_input_channel * filter_height * filter_width + c * filter_height * filter_width + fh * filter_width + fw];
+                    for (int oh = 0; oh < n_output_height; oh++)
                     {
-                        for (size_t c = 0; c < n_input_channel; c++)
+                        int ih = oh * stride + fh;
+                        int out_off = n * n_output_height * n_output_width + oh * n_output_width;
+                        int in_off = c * n_input_height * n_input_width + ih * n_input_width + fw;
+                        for (int ow = 0; ow < n_output_width; ow++)
                         {
-                            output[n * n_output_height * n_output_width + oh * n_output_width + ow] += input[c * n_input_height * n_input_width + (oh*stride+fh) * n_input_width + (ow*stride+fw)] * filter[n * n_input_channel * filter_width * filter_height + c * filter_width * filter_height  + fh * filter_width + fw];
+                            output[out_off + ow] += w * input[in_off + ow * stride];
                         }
-                        
                     }
-                    
                 }
-                
             }
-            
         }
-        
     }
     for (int n = 0; n < n_filters; n++)
-        for (int p = 0; p < n_output_height * n_output_width; p++)
-            output[n * n_output_height * n_output_width + p] += bias[n];
-    
+    {
+        float b = bias[n];
+        int out_size = n_output_height * n_output_width;
+        int out_off = n * out_size;
+        for (int p = 0; p < out_size; p++)
+            output[out_off + p] += b;
+    }
 }
 
 void forward_maxpool(float *input, float *output, int n_channels, int in_height, int in_width, int kernel_height, int kernel_width, uint8_t *mask) {
@@ -380,26 +382,28 @@ void compute_output_softmax_delta (float *output_delta, float *output_layer_acti
     
 }
 
-void compute_backward_fc (float *output_delta, float *current_delta, float *weight, int n_output_delta, int n_current_delta) {
+void compute_backward_fc (float * restrict output_delta, const float * restrict current_delta, const float * restrict weight, int n_output_delta, int n_current_delta) {
     memset(output_delta, 0, n_output_delta * sizeof(float));
-    for (size_t j = 0; j < n_current_delta; j++)
+    for (int j = 0; j < n_current_delta; j++)
     {
-        for (size_t i = 0; i < n_output_delta; i++)
+        float cd = current_delta[j];
+        int w_base = j * n_output_delta;
+        for (int i = 0; i < n_output_delta; i++)
         {
-            output_delta[i] += current_delta[j] * weight[j * n_output_delta+ i];
+            output_delta[i] += cd * weight[w_base + i];
         }
-        
     }
 }
 
-void compute_weight_grad (float *z_delta, float *previous_activation_arr, float *output_arr, int n_of_output, int n_of_input) {
+void compute_weight_grad (const float * restrict z_delta, const float * restrict previous_activation_arr, float * restrict output_arr, int n_of_output, int n_of_input) {
     for (int i = 0; i < n_of_output; i++)
     {
+        float zd = z_delta[i];
+        int row = i * n_of_input;
         for (int j = 0; j < n_of_input; j++)
         {
-            output_arr[i * n_of_input + j] = z_delta[i] * previous_activation_arr[j];
+            output_arr[row + j] = zd * previous_activation_arr[j];
         }
-        
     }
 }
 
@@ -431,53 +435,79 @@ void compute_backward_maxpool (float *computed_delta, float *current_delta, uint
     
 }
 
-void compute_backward_conv (float *computed_delta, float *grad_filter, float *grad_bias, float *activation, float *current_delta, float *filter, float *input, int n_input_height, int n_input_width, int filter_height, int filter_width, int n_filters, int in_channel, int in_h, int in_w, int stride) {
-    //standby
+void compute_backward_conv (float * restrict computed_delta, float * restrict grad_filter, float * restrict grad_bias, float *activation, const float * restrict current_delta, const float * restrict filter, const float * restrict input, int n_input_height, int n_input_width, int filter_height, int filter_width, int n_filters, int in_channel, int in_h, int in_w, int stride) {
     int n_output_height = (n_input_height - filter_height) / stride + 1;
-    int n_output_width = (n_input_width - filter_width) / stride  + 1;
+    int n_output_width = (n_input_width - filter_width) / stride + 1;
 
-    //zero fill
     memset(computed_delta, 0, in_channel * n_input_height * n_input_width * sizeof(float));
     memset(grad_filter, 0, n_filters * in_channel * filter_height * filter_width * sizeof(float));
 
-    for (size_t n = 0; n < n_filters; n++)
+    // grad_filter: accumulate over (oh, ow) with ow innermost for contiguous output access
+    for (int n = 0; n < n_filters; n++)
     {
-        for (size_t oh = 0; oh < n_output_height; oh++)
+        for (int c = 0; c < in_channel; c++)
         {
-            for (size_t ow = 0; ow < n_output_width; ow++)
+            for (int fh = 0; fh < filter_height; fh++)
             {
-                for (size_t fh = 0; fh < filter_height; fh++)
+                for (int fw = 0; fw < filter_width; fw++)
                 {
-                    for (size_t fw = 0; fw < filter_width; fw++)
+                    float sum = 0.0f;
+                    int gf_idx = n * in_channel * filter_height * filter_width + c * filter_height * filter_width + fh * filter_width + fw;
+                    for (int oh = 0; oh < n_output_height; oh++)
                     {
-                        for (size_t c = 0; c < in_channel; c++)
+                        int ih = oh * stride + fh;
+                        int cd_base = n * n_output_height * n_output_width + oh * n_output_width;
+                        int in_base = c * n_input_height * n_input_width + ih * n_input_width + fw;
+                        for (int ow = 0; ow < n_output_width; ow++)
                         {
-                            grad_filter[n * in_channel * filter_height * filter_width + c * filter_height * filter_width + fh * filter_width + fw] += current_delta[n_output_height * n_output_width * n + n_output_width * oh + ow] * input[c * n_input_height * n_input_width + (oh*stride+fh) * n_input_width+ ow*stride+fw];
-                            computed_delta[c * n_input_height * n_input_width + (oh*stride+fh) * n_input_width+ ow*stride+fw] += current_delta[n * n_output_height * n_output_width + oh * n_output_width + ow] * filter[n * in_channel * filter_width * filter_height + c * filter_width * filter_height  + fh * filter_width + fw];
+                            sum += current_delta[cd_base + ow] * input[in_base + ow * stride];
                         }
-                        
                     }
-                    
+                    grad_filter[gf_idx] = sum;
                 }
-                
             }
-            
         }
-        
     }
-    for (size_t n = 0; n < n_filters; n++)
+
+    // computed_delta: propagate error to input, with ow innermost
+    for (int n = 0; n < n_filters; n++)
     {
-        for (size_t oh = 0; oh < n_output_height; oh++)
+        for (int c = 0; c < in_channel; c++)
         {
-            for (size_t ow = 0; ow < n_output_width; ow++)
+            for (int fh = 0; fh < filter_height; fh++)
             {
-                grad_bias[n] += current_delta[n_output_height * n_output_width * n + n_output_width * oh + ow];
+                for (int oh = 0; oh < n_output_height; oh++)
+                {
+                    int ih = oh * stride + fh;
+                    for (int fw = 0; fw < filter_width; fw++)
+                    {
+                        float w = filter[n * in_channel * filter_height * filter_width + c * filter_height * filter_width + fh * filter_width + fw];
+                        int cd_base = n * n_output_height * n_output_width + oh * n_output_width;
+                        int out_base = c * n_input_height * n_input_width + ih * n_input_width + fw;
+                        for (int ow = 0; ow < n_output_width; ow++)
+                        {
+                            computed_delta[out_base + ow * stride] += current_delta[cd_base + ow] * w;
+                        }
+                    }
+                }
             }
-            
         }
-        
     }
-    
+
+    // grad_bias: sum current_delta over spatial positions
+    for (int n = 0; n < n_filters; n++)
+    {
+        float sum = 0.0f;
+        int cd_base = n * n_output_height * n_output_width;
+        for (int oh = 0; oh < n_output_height; oh++)
+        {
+            for (int ow = 0; ow < n_output_width; ow++)
+            {
+                sum += current_delta[cd_base + oh * n_output_width + ow];
+            }
+        }
+        grad_bias[n] = sum;
+    }
 }
 
 void backward_pass (neural_network_t *nn, float *input, float *answer) {
@@ -645,6 +675,28 @@ void update_param_adam (neural_network_t *nn, float lr, float weight_decay, floa
             break;
         }
         
+        
+        default:
+            break;
+        }
+    }
+    
+}
+
+void flush_grad (neural_network_t *nn) {
+    for (int i = 0; i < nn->n_layers; i++)
+    {
+        switch (nn->layers[i].type)
+        {
+        case LAYER_FC:
+            memset(nn->layers[i].data.fc.total_grad_weight, 0, nn->layers[i].data.fc.in_size * nn->layers[i].data.fc.out_size * sizeof(float));
+            memset(nn->layers[i].data.fc.total_grad_bias, 0, nn->layers[i].data.fc.out_size * sizeof(float));
+            break;
+
+        case LAYER_CONV:
+            memset(nn->layers[i].data.conv.total_grad_filter, 0, nn->layers[i].data.conv.filter_height * nn->layers[i].data.conv.filter_width * nn->layers[i].data.conv.in_channel * nn->layers[i].data.conv.n_filters * sizeof(float));
+            memset(nn->layers[i].data.conv.total_grad_bias, 0, nn->layers[i].data.conv.n_filters *  sizeof(float));
+            break;
         
         default:
             break;

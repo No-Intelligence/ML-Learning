@@ -51,24 +51,27 @@ int main(int argc, char const *argv[])
 {
     srand(time(NULL));
     neural_network_t *nn = alloc_neural_network();
-    add_conv_layer(nn, 28, 28, 1, 3, 3, 32, 1, 0);
+    add_fc_layer(nn, 28*28, 256);
     add_activation_layer(nn, LAYER_GELU);
-    add_pool_layer(nn, 26, 26, 32, 2, 2);
-    add_conv_layer(nn, 13, 13, 32, 3, 3, 64, 1, 0);
-    add_activation_layer(nn, LAYER_GELU);
-    add_pool_layer(nn, 11, 11, 64, 2, 2);
-    add_flatten_layer(nn);
-    add_fc_layer(nn, 5*5*64, 128);
+    add_fc_layer(nn, 256, 128);
     add_activation_layer(nn, LAYER_GELU);
     add_fc_layer(nn, 128, 10);
     add_activation_layer(nn, LAYER_SOFTMAX);
     
     parameter_initialize(nn);
 
-    float *input_buffer = calloc(60000 * 784, sizeof(float));
+    float *input_buffer = calloc(60000 * 28 * 28, sizeof(float));
     uint8_t *answer_label_buffer = calloc(60000, sizeof(uint8_t));
-    load_MNIST_format_image("train-images-fashion-idx3-ubyte", 60000, input_buffer);
-    load_MNIST_format_label("train-labels-fashion-idx1-ubyte", 60000, answer_label_buffer);
+    if (load_MNIST_format_image("train-images-idx3-ubyte", 60000, input_buffer) == 1)
+    {
+        printf("error!\n");
+        return 1;
+    }
+    if (load_MNIST_format_label("train-labels-idx1-ubyte", 60000, answer_label_buffer) == 1)
+    {
+        printf("error!\n");
+        return 1;
+    }
     printf("train data loaded\n");
 
     float *input_one_image = calloc(784, sizeof(float));
@@ -103,8 +106,16 @@ int main(int argc, char const *argv[])
         }
     }
 
-    load_MNIST_format_image("t10k-images-fashion-idx3-ubyte", 10000, input_buffer);
-    load_MNIST_format_label("t10k-labels-fashion-idx1-ubyte", 10000, answer_label_buffer);
+    if (load_MNIST_format_image("t10k-images-idx3-ubyte", 10000, input_buffer) == 1)
+    {
+        printf("error!\n");
+        return 1;
+    }
+    if (load_MNIST_format_label("t10k-labels-idx1-ubyte", 10000, answer_label_buffer) == 1)
+    {
+        printf("error!\n");
+        return 1;
+    }
     for (size_t i = 0; i < 10000; i++)
     {
         memcpy(input_one_image, &input_buffer[784 * i], 784 * sizeof(float));
