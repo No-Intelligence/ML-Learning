@@ -108,7 +108,7 @@ void forward_convolution (const float * restrict input, const float * restrict f
 
 void forward_maxpool(float *input, float *output, int n_channels, int in_height, int in_width, int kernel_height, int kernel_width, uint8_t *mask);
 
-void forward_pass (neural_network_t *nn, float *input);
+float forward_pass (neural_network_t *nn, float *input, float *answer_one_hot);
 
 void compute_output_softmax_delta (float *output_delta, float *output_layer_activation, float *answer_arr, int n_of_arr);
 

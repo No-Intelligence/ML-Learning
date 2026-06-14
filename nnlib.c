@@ -330,8 +330,9 @@ void forward_maxpool(float *input, float *output, int n_channels, int in_height,
     
 }
 
-void forward_pass (neural_network_t *nn, float *input) {
+float forward_pass (neural_network_t *nn, float *input, float *answer_one_hot) {
     float *current_input = input;
+    float loss = 0.0f;
     for (size_t i = 0; i < nn->n_layers; i++)
     {
         switch (nn->layers[i].type)
@@ -371,6 +372,12 @@ void forward_pass (neural_network_t *nn, float *input) {
         }
         current_input = nn->layers[i].output;
     }
+
+    for (int i = 0; i < nn->layers[nn->n_layers - 1].output_size; i++){
+    loss += answer_one_hot[i] * logf(nn->layers[nn->n_layers - 1].output[i] + 1e-8f);
+    }
+    loss = -loss;
+    return loss;
     
 }
 
