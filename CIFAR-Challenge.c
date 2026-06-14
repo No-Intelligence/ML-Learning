@@ -92,16 +92,9 @@ int main(int argc, char const *argv[])
     neural_network_t *nn = alloc_neural_network();
     add_conv_layer(nn, 32, 32, 3, 3, 3, 32, 1, 0);
     add_activation_layer(nn, LAYER_GELU);
-    add_pool_layer(nn, 30, 30, 32, 2, 2);
-    add_conv_layer(nn, 15, 15, 32, 3, 3, 64, 1, 0);
-    add_activation_layer(nn, LAYER_GELU);
-    add_pool_layer(nn, 13, 13, 64, 2, 2);
-    add_conv_layer(nn, 6, 6, 64, 3, 3, 128, 1, 0);
-    add_activation_layer(nn, LAYER_GELU);
+    add_pool_layer(nn, 30, 30, 32, 3, 3);
     add_flatten_layer(nn);
-    add_fc_layer(nn, 4*4*128, 256);
-    add_activation_layer(nn, LAYER_GELU);
-    add_fc_layer(nn, 256, 128);
+    add_fc_layer(nn, 10*10*32, 128);
     add_activation_layer(nn, LAYER_GELU);
     add_fc_layer(nn, 128, 10);
     add_activation_layer(nn, LAYER_SOFTMAX);
@@ -180,6 +173,8 @@ int main(int argc, char const *argv[])
         printf("%f%%\n", ((float)hit / 10000.0f) * 100.0f);
         flush_grad(nn);
     }
+
+    fclose(log);
     
     free(input_buffer);
     free(answer_label_buffer);
