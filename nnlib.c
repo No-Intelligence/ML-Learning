@@ -42,7 +42,7 @@ void add_conv_layer (neural_network_t *nn, int in_height, int in_width, int in_c
     nn->layers = realloc(nn->layers, nn->n_layers * sizeof(layer_t));
     nn->layers[nn->n_layers - 1].type = LAYER_CONV;
     nn->layers[nn->n_layers - 1].output_size = n_filters * out_height * out_width;
-    nn->layers[nn->n_layers - 1].delta = calloc(n_filters * in_height * in_width, sizeof(float));
+    nn->layers[nn->n_layers - 1].delta = calloc(in_channel * in_height * in_width, sizeof(float));
     nn->layers[nn->n_layers - 1].output = calloc(n_filters * out_height * out_width, sizeof(float));
 
     nn->layers[nn->n_layers - 1].data.conv.in_height = in_height;
@@ -667,18 +667,20 @@ void update_param_adam (neural_network_t *nn, float lr, float weight_decay, floa
 
             for (size_t i = 0; i < nn->layers[layer].data.conv.n_filters * nn->layers[layer].data.conv.in_channel * nn->layers[layer].data.conv.filter_height * nn->layers[layer].data.conv.filter_width; i++)
             {
-                float g = (nn->layers[layer].data.conv.grad_filter[i] / batch_size);
+                float g = (nn->layers[layer].data.conv.total_grad_filter[i] / batch_size);
                 nn->layers[layer].data.conv.m_filter[i] = beta1 * nn->layers[layer].data.conv.m_filter[i] + (1 - beta1) * g;
                 nn->layers[layer].data.conv.v_filter[i] = beta2 * nn->layers[layer].data.conv.v_filter[i] + (1 - beta2) * g * g;
                 nn->layers[layer].data.conv.filter[i] -= bc * nn->layers[layer].data.conv.m_filter[i] / (sqrtf(nn->layers[layer].data.conv.v_filter[i]) + eps) + lr * weight_decay * nn->layers[layer].data.conv.filter[i];
             }
+            memset(nn->layers[layer].data.conv.total_grad_filter, 0, nn->layers[layer].data.conv.n_filters * nn->layers[layer].data.conv.in_channel * nn->layers[layer].data.conv.filter_height * nn->layers[layer].data.conv.filter_width * sizeof(float));
             for (size_t i = 0; i < nn->layers[layer].data.conv.n_filters; i++)
             {
-                float g = (nn->layers[layer].data.conv.grad_bias[i] / batch_size);
+                float g = (nn->layers[layer].data.conv.total_grad_bias[i] / batch_size);
                 nn->layers[layer].data.conv.m_bias[i] = beta1 * nn->layers[layer].data.conv.m_bias[i] + (1 - beta1) * g;
                 nn->layers[layer].data.conv.v_bias[i] = beta2 * nn->layers[layer].data.conv.v_bias[i] + (1 - beta2) * g * g;
                 nn->layers[layer].data.conv.bias[i] -= bc * nn->layers[layer].data.conv.m_bias[i] / (sqrtf(nn->layers[layer].data.conv.v_bias[i]) + eps);
             }
+            memset(nn->layers[layer].data.conv.total_grad_bias, 0, nn->layers[layer].data.conv.n_filters * sizeof(float));
             break;
         }
         
