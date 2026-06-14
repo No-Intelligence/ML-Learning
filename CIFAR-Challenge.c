@@ -6,7 +6,7 @@
 #include <time.h>
 #include <stdint.h>
 #include "nnlib.h"
-
+#include <pthread.h>
 
 float learning_rate = 0.001f;
 float regularization_rate = 0.0005f;
@@ -96,8 +96,10 @@ int main(int argc, char const *argv[])
     add_conv_layer(nn, 15, 15, 32, 3, 3, 64, 1, 0);
     add_activation_layer(nn, LAYER_GELU);
     add_pool_layer(nn, 13, 13, 64, 2, 2);
+    add_conv_layer(nn, 6, 6, 64, 3, 3, 128, 1, 0);
+    add_activation_layer(nn, LAYER_GELU);
     add_flatten_layer(nn);
-    add_fc_layer(nn, 6*6*64, 256);
+    add_fc_layer(nn, 4*4*128, 256);
     add_activation_layer(nn, LAYER_GELU);
     add_fc_layer(nn, 256, 128);
     add_activation_layer(nn, LAYER_GELU);
@@ -117,13 +119,19 @@ int main(int argc, char const *argv[])
     float *testbatch_image_buffer = calloc(32 * 32 * 3 * 10000, sizeof(float));
     uint8_t *testbatch_labed_buffer = calloc(10000, sizeof(float));
 
+    //log file
+    FILE *log;
+    log = fopen("log.csv", "w");
+    fprintf(log, "log file,train loss,test loss\n");
+
     if (CIFAR_10_batch_loader(input_buffer, answer_label_buffer) ==-1) return -1;
     if (CIFAR_10_loader("test_batch.bin", testbatch_image_buffer, testbatch_labed_buffer) == -1) return -1;
     printf("data loaded\n");
 
-    for (int epoch = 0; epoch < 1; epoch++)
+    for (int epoch = 0; epoch < 2; epoch++)
     {
         printf("training start\n");
+        fprintf(log, "epoch:%d,", epoch + 1);
         loss = 0.0f;
         for (int i = 0; i < 50000; i++)
         {
@@ -138,12 +146,13 @@ int main(int argc, char const *argv[])
             {
                 t++;
                 update_param_adam(nn, learning_rate, regularization_rate, 0.9f, 0.999f, 1e-7, t, 50);
-                show_progress(i+1, 50000, 100);
+                show_progress(i+1, 50000, 20);
             }
             
         }
         loss /= 50000.0f;
         printf("\ntraining finished. loss:%f\n", loss);
+        fprintf(log, "%f,", loss);
         
         hit = 0;
         printf("test start\n");
@@ -162,11 +171,12 @@ int main(int argc, char const *argv[])
             }
             if ((i%50) == 49)
             {
-                show_progress(i+1, 10000, 100);
+                show_progress(i+1, 10000, 20);
             }
         }
         loss /= 10000.0f;
         printf("\ntest finished. loss:%f\n", loss);
+        fprintf(log, "%f\n", loss);
         printf("%f%%\n", ((float)hit / 10000.0f) * 100.0f);
         flush_grad(nn);
     }
